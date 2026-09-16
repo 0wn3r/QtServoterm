@@ -31,6 +31,11 @@ QT_BEGIN_NAMESPACE
 class QTimer;
 QT_END_NAMESPACE
 
+inline uint qHash(const QPoint &pt)
+{
+    return (pt.y() << 16) + pt.x();
+}
+
 namespace STMBL_Servoterm {
 
 class XYOscilloscope : public QWidget
