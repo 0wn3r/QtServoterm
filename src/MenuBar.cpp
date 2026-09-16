@@ -55,6 +55,16 @@ MenuBar::MenuBar(Actions *actions, QWidget *parent) : QMenuBar(parent)
     viewMenu->addAction(actions->viewConsole);
     viewMenu->addSeparator();
     viewMenu->addAction(actions->viewClearConsole);
+    viewMenu->addSeparator();
+    QMenu * const themeMenu = viewMenu->addMenu("Theme");
+    themeMenu->addAction(actions->viewThemeSystem);
+    themeMenu->addAction(actions->viewThemeLight);
+    themeMenu->addAction(actions->viewThemeDark);
+    themeGroup = new QActionGroup(this);
+    themeGroup->setExclusive(true);
+    themeGroup->addAction(actions->viewThemeSystem);
+    themeGroup->addAction(actions->viewThemeLight);
+    themeGroup->addAction(actions->viewThemeDark);
 }
 
 } // namespace STMBL_Servoterm

@@ -37,11 +37,17 @@ Actions::Actions(QObject *parent) : QObject(parent)
     viewXYScope = new QAction("Show X/Y Scope", this);
     viewConsole = new QAction("Show Console Output", this); // TODO change this to "Show Console"
     viewClearConsole = new QAction("Clear", this); // TODO change this to "Clear Console"?
+    viewThemeSystem = new QAction("System", this);
+    viewThemeLight = new QAction("Light", this);
+    viewThemeDark = new QAction("Dark", this);
     driveJogEnable->setCheckable(true);
     dataRecord->setCheckable(true);
     viewOscilloscope->setCheckable(true);
     viewXYScope->setCheckable(true);
     viewConsole->setCheckable(true);
+    viewThemeSystem->setCheckable(true);
+    viewThemeLight->setCheckable(true);
+    viewThemeDark->setCheckable(true);
 }
 
 } // namespace STMBL_Servoterm

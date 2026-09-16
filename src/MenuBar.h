@@ -34,6 +34,7 @@ public:
 public:
     QMenu *portMenu;
     QActionGroup *portGroup;
+    QActionGroup *themeGroup;
 };
 
 } // namespace STMBL_Servoterm
