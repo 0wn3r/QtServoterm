@@ -39,6 +39,7 @@
 // #include <QDebug>
 
 #include "MainWindow.h"
+#include "globals.h"
 #include "AppendTextToEdit.h"
 #include "Actions.h"
 #include "MenuBar.h"
@@ -143,6 +144,23 @@ MainWindow::MainWindow(QWidget *parent) :
     {
         QWidget * const dummy = new QWidget;
         QVBoxLayout * const vbox = new QVBoxLayout(dummy);
+        {
+            QHBoxLayout * const hbox = new QHBoxLayout;
+            for (int channel = 0; channel < SCOPE_CHANNEL_COUNT; channel++)
+            {
+                QCheckBox * const cb = new QCheckBox(QString::number(channel + 1));
+                cb->setChecked(true);
+                QPalette pal = cb->palette();
+                pal.setColor(QPalette::WindowText, SCOPE_CHANNEL_COLORS[channel]);
+                cb->setPalette(pal);
+                connect(cb, &QCheckBox::toggled, this, [this, channel] (bool enabled) {
+                    _oscilloscope->setChannelEnabled(channel, enabled);
+                });
+                hbox->addWidget(cb);
+            }
+            hbox->addStretch(1);
+            vbox->addLayout(hbox);
+        }
         {
             QHBoxLayout * const hbox = new QHBoxLayout;
             hbox->addWidget(_oscilloscope, 1);
