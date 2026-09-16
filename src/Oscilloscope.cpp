@@ -25,18 +25,6 @@
 
 namespace STMBL_Servoterm {
 
-static const QColor SCOPE_CHANNEL_COLORS[SCOPE_CHANNEL_COUNT] =
-{
-    Qt::black,
-    Qt::red,
-    Qt::blue,
-    Qt::green,
-    QColor(255, 128, 0),
-    QColor(128, 128, 64),
-    QColor(128, 64, 128),
-    QColor(64, 128, 128)
-};
-
 Oscilloscope::Oscilloscope(QWidget *parent) : QWidget(parent), _scopeX(0)
 {
     setMinimumSize(600, 256);
@@ -44,6 +32,18 @@ Oscilloscope::Oscilloscope(QWidget *parent) : QWidget(parent), _scopeX(0)
     pal.setColor(QPalette::Background, Qt::white);
     setAutoFillBackground(true);
     setPalette(pal);
+    for (int channel = 0; channel < SCOPE_CHANNEL_COUNT; channel++)
+    {
+        _channelEnabled[channel] = true;
+    }
+}
+
+void Oscilloscope::setChannelEnabled(int channel, bool enabled)
+{
+    if (channel < 0 || channel >= SCOPE_CHANNEL_COUNT || _channelEnabled[channel] == enabled)
+        return;
+    _channelEnabled[channel] = enabled;
+    update();
 }
 
 void Oscilloscope::addChannelsSample(const QVector<float> &channelsSample)
@@ -74,7 +74,7 @@ void Oscilloscope::resetScanning()
     _SetScopeX(0);
 }
 
-static void DrawSampleRange(const QVector< QVector<float> > &channelsSamples, int start, int end, int h, QPainter &painter)
+static void DrawSampleRange(const QVector< QVector<float> > &channelsSamples, int start, int end, int h, QPainter &painter, const bool *channelEnabled)
 {
     const int numSamples = end - start;
     if (numSamples <= 0)
@@ -83,6 +83,8 @@ static void DrawSampleRange(const QVector< QVector<float> > &channelsSamples, in
     points.reserve(numSamples);
     for (int channel = 0; channel < SCOPE_CHANNEL_COUNT; channel++)
     {
+        if (!channelEnabled[channel])
+            continue;
         points.resize(0);
         for (int sample = start; sample < end; sample++)
         {
@@ -115,8 +117,8 @@ void Oscilloscope::paintEvent(QPaintEvent *event)
         const int  firstX = qMax(0, event->rect().x()-1);
         const int   lastX = qMin(event->rect().x()+event->rect().width(), _channelsSamples.size());
         const int middleX = qBound(firstX, _scopeX, lastX);
-        DrawSampleRange(_channelsSamples,  firstX, middleX, h, painter);
-        DrawSampleRange(_channelsSamples, middleX,   lastX, h, painter);
+        DrawSampleRange(_channelsSamples,  firstX, middleX, h, painter, _channelEnabled);
+        DrawSampleRange(_channelsSamples, middleX,   lastX, h, painter, _channelEnabled);
     }
     painter.setPen(Qt::blue);
     painter.drawLine(_scopeX, 0, _scopeX, h-1);

@@ -34,12 +34,14 @@ public:
 public slots:
     void addChannelsSample(const QVector<float> &channelsSample);
     void resetScanning();
+    void setChannelEnabled(int channel, bool enabled);
 protected:
     void paintEvent(QPaintEvent *event);
     void resizeEvent(QResizeEvent *event);
     void _SetScopeX(int newX);
     QVector< QVector<float> > _channelsSamples;
     int _scopeX;
+    bool _channelEnabled[SCOPE_CHANNEL_COUNT];
 };
 
 } // namespace STMBL_Servoterm
