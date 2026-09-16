@@ -29,7 +29,7 @@ Oscilloscope::Oscilloscope(QWidget *parent) : QWidget(parent), _scopeX(0)
 {
     setMinimumSize(600, 256);
     QPalette pal = palette();
-    pal.setColor(QPalette::Background, Qt::white);
+    pal.setColor(QPalette::Window, Qt::white);
     setAutoFillBackground(true);
     setPalette(pal);
     for (int channel = 0; channel < SCOPE_CHANNEL_COUNT; channel++)

@@ -43,11 +43,11 @@ jobs:
         pacboy: >-
           toolchain:p
           cmake:p
-          qt5-static:p
+          qt6-static:p
           ninja:p
     - name: '🚧 Build TOOL'
       run: |
-        /${{matrix.sys}}/qt5-static/bin/qmake
+        /${{matrix.sys}}/qt6-static/bin/qmake
         make
     - uses: actions/upload-artifact@v3
       with:
