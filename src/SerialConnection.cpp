@@ -22,7 +22,13 @@ SerialConnection::SerialConnection(QObject *parent) :
     _serialSendTimer(new QTimer(this)),
     _redirectingToConfigEdit(false)
 {
-    _redirectingTimer->setInterval(100);
+    // NOTE: this same interval also has to cover the delay before the
+    // *first* byte of a "showconf" response arrives, which can be
+    // noticeably slower on a freshly opened connection than the gap
+    // between later chunks; too short and the timeout fires before any
+    // data arrives, so the (still valid) response ends up routed to the
+    // console log instead of the config editor once it does show up
+    _redirectingTimer->setInterval(800);
     _redirectingTimer->setSingleShot(true);
     _serialSendTimer->setInterval(50);
 
