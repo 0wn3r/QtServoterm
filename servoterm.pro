@@ -1,5 +1,5 @@
 QT += widgets serialport network
-CONFIG += object_parallel_to_source
+CONFIG += object_parallel_to_source c++17
 
 HEADERS = \
 src/AppendTextToEdit.h \

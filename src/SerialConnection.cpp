@@ -7,6 +7,7 @@
 #include <QTimer>
 #include <QMessageBox>
 #include <QMetaEnum>
+#include <QRegularExpression>
 
 namespace STMBL_Servoterm {
 
@@ -142,7 +143,8 @@ void SerialConnection::connectTo(const QString &portName)
     else // must be IP (or maybe even hostname?)
     {
         const QStringList parts = portName.split(':');
-        const bool isValidNetworkPort = (parts.size() == 2) && QRegExp("\\d*").exactMatch(parts.at(1)) && parts.at(1).toInt() <= std::numeric_limits<quint16>::max();
+        static const QRegularExpression allDigitsRe(QRegularExpression::anchoredPattern("\\d*"));
+        const bool isValidNetworkPort = (parts.size() == 2) && allDigitsRe.match(parts.at(1)).hasMatch() && parts.at(1).toInt() <= std::numeric_limits<quint16>::max();
         if (!isValidNetworkPort)
         {
             QMessageBox::critical(nullptr, "Error connecting", "Unable to interpret \"" + portName + "\" as a serial port device name nor as an IP/port");

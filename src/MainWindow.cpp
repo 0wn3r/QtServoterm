@@ -20,7 +20,6 @@
 #include <QtWidgets>
 #include <QToolBar>
 #include <QSettings>
-#include <QRegExp>
 #include <QTextEdit>
 #include <QPlainTextEdit>
 #include <QLineEdit>
