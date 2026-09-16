@@ -71,6 +71,7 @@ protected slots:
     void slot_ScopeResetReceived();
     void slot_UpdateButtons();
     void slot_SendJogCommand();
+    void slot_ThemeSelected(QAction *act);
 protected:
     void dragEnterEvent(QDragEnterEvent *event);
     void dragMoveEvent(QDragMoveEvent *event);
@@ -81,6 +82,14 @@ protected:
     void _RepopulateDeviceList();
     void _saveSettings();
     void _loadSettings();
+    void _ApplyTheme(int theme);
+
+    enum Theme
+    {
+        THEME_SYSTEM,
+        THEME_LIGHT,
+        THEME_DARK
+    };
 
     SerialConnection *_serialConnection;
     Actions *_actions;
@@ -99,6 +108,7 @@ protected:
     QShortcut *_estopShortcut;
     bool _leftPressed;
     bool _rightPressed;
+    Theme _theme;
     enum JogState
     {
         JOGGING_IDLE,

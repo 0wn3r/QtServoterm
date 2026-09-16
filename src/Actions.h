@@ -46,6 +46,9 @@ public:
     QAction *viewXYScope;
     QAction *viewConsole;
     QAction *viewClearConsole;
+    QAction *viewThemeSystem;
+    QAction *viewThemeLight;
+    QAction *viewThemeDark;
 };
 
 } // namespace STMBL_Servoterm

@@ -35,6 +35,7 @@
 #include <QFileInfo>
 #include <QFile>
 #include <QDesktopServices>
+#include <QStyleHints>
 // #include <QDebug>
 
 #include "MainWindow.h"
@@ -76,7 +77,8 @@ MainWindow::MainWindow(QWidget *parent) :
     _csvFile(new QFile(this)),
     _estopShortcut(new QShortcut(QKeySequence("Esc"), this)),
     _leftPressed(false),
-    _rightPressed(false)
+    _rightPressed(false),
+    _theme(THEME_SYSTEM)
 {
     _jogTimer->setInterval(SEND_JOG_COMMAND_PERIOD_MS);
     _portList->setEditable(true);
@@ -113,6 +115,7 @@ MainWindow::MainWindow(QWidget *parent) :
     _actions->viewOscilloscope->setChecked(true);
     _actions->viewXYScope->setChecked(false);
     _actions->viewConsole->setChecked(true);
+    _actions->viewThemeSystem->setChecked(true);
     // TODO find a better solution to the side effects of setVisible(true) when it's already visible but not shown yet
     if (!_actions->viewOscilloscope->isChecked())
         _oscilloscope->setVisible(_actions->viewOscilloscope->isChecked());
@@ -182,6 +185,7 @@ MainWindow::MainWindow(QWidget *parent) :
     connect(_actions->viewConsole, &QAction::toggled, _textLog, &QWidget::setVisible);
     connect(_menuBar->portMenu, &QMenu::aboutToShow, this, &MainWindow::slot_PortListClicked);
     connect(_menuBar->portGroup, &QActionGroup::triggered, this, &MainWindow::slot_PortMenuItemSelected);
+    connect(_menuBar->themeGroup, &QActionGroup::triggered, this, &MainWindow::slot_ThemeSelected);
     connect(_portList, &ClickableComboBox::clicked, this, &MainWindow::slot_PortListClicked);
     connect(_portList, &ClickableComboBox::currentTextChanged, this, &MainWindow::slot_PortLineEditChanged);
     connect(_actions->connectionConnect, &QAction::triggered, this, &MainWindow::slot_ConnectClicked);
@@ -460,6 +464,16 @@ void MainWindow::slot_SendJogCommand()
         _jogTimer->start();
 }
 
+void MainWindow::slot_ThemeSelected(QAction *act)
+{
+    Theme theme = THEME_SYSTEM;
+    if (act == _actions->viewThemeLight)
+        theme = THEME_LIGHT;
+    else if (act == _actions->viewThemeDark)
+        theme = THEME_DARK;
+    _ApplyTheme(theme);
+}
+
 void MainWindow::dragEnterEvent(QDragEnterEvent *event)
 {
     // if (event->mimeData().hasUrls())
@@ -610,6 +624,9 @@ void MainWindow::_saveSettings()
     _settings->beginGroup("ConfigDialog");
     _settings->setValue("geometry", _configDialog->saveGeometry());
     _settings->endGroup();
+    _settings->beginGroup("Theme");
+    _settings->setValue("mode", static_cast<int>(_theme));
+    _settings->endGroup();
 }
 
 void MainWindow::_loadSettings()
@@ -621,6 +638,81 @@ void MainWindow::_loadSettings()
     _settings->beginGroup("ConfigDialog");
     _configDialog->restoreGeometry(_settings->value("geometry").toByteArray());
     _settings->endGroup();
+    _settings->beginGroup("Theme");
+    const int theme = _settings->value("mode", static_cast<int>(THEME_SYSTEM)).toInt();
+    _settings->endGroup();
+    switch (theme)
+    {
+        case THEME_LIGHT: _actions->viewThemeLight->setChecked(true); break;
+        case THEME_DARK:  _actions->viewThemeDark->setChecked(true);  break;
+        default:          _actions->viewThemeSystem->setChecked(true); break;
+    }
+    _ApplyTheme(static_cast<Theme>(theme));
+}
+
+void MainWindow::_ApplyTheme(int theme)
+{
+    _theme = static_cast<Theme>(theme);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+    // the officially supported way to force light/dark/system regardless
+    // of the native style -- available from Qt 6.5 onward
+    switch (_theme)
+    {
+        case THEME_LIGHT:
+        qApp->styleHints()->setColorScheme(Qt::ColorScheme::Light);
+        break;
+
+        case THEME_DARK:
+        qApp->styleHints()->setColorScheme(Qt::ColorScheme::Dark);
+        break;
+
+        case THEME_SYSTEM:
+        default:
+        qApp->styleHints()->setColorScheme(Qt::ColorScheme::Unknown);
+        break;
+    }
+#else
+    // Qt < 6.5 has no QStyleHints::setColorScheme(); best effort with a
+    // manual Fusion-based palette for Light/Dark. There's no clean way
+    // back to "System" once overridden pre-6.5 short of a restart, so
+    // System just leaves whatever's currently applied alone.
+    switch (_theme)
+    {
+        case THEME_LIGHT:
+        {
+            qApp->setStyle("Fusion");
+            qApp->setPalette(QApplication::style()->standardPalette());
+            break;
+        }
+
+        case THEME_DARK:
+        {
+            qApp->setStyle("Fusion");
+            QPalette pal;
+            pal.setColor(QPalette::Window, QColor(53, 53, 53));
+            pal.setColor(QPalette::WindowText, Qt::white);
+            pal.setColor(QPalette::Base, QColor(35, 35, 35));
+            pal.setColor(QPalette::AlternateBase, QColor(53, 53, 53));
+            pal.setColor(QPalette::ToolTipBase, Qt::white);
+            pal.setColor(QPalette::ToolTipText, Qt::white);
+            pal.setColor(QPalette::Text, Qt::white);
+            pal.setColor(QPalette::Button, QColor(53, 53, 53));
+            pal.setColor(QPalette::ButtonText, Qt::white);
+            pal.setColor(QPalette::BrightText, Qt::red);
+            pal.setColor(QPalette::Link, QColor(42, 130, 218));
+            pal.setColor(QPalette::Highlight, QColor(42, 130, 218));
+            pal.setColor(QPalette::HighlightedText, Qt::black);
+            pal.setColor(QPalette::Disabled, QPalette::Text, QColor(127, 127, 127));
+            pal.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(127, 127, 127));
+            qApp->setPalette(pal);
+            break;
+        }
+
+        case THEME_SYSTEM:
+        default:
+        break;
+    }
+#endif
 }
 
 } // namespace STMBL_Servoterm
