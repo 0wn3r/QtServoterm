@@ -30,6 +30,7 @@
 #include <QToolButton>
 #include <QGroupBox>
 #include <QRegularExpression>
+#include <QSignalBlocker>
 #include <QDoubleSpinBox>
 #include <QGridLayout>
 #include <QLabel>
@@ -247,6 +248,7 @@ MainWindow::MainWindow(QWidget *parent) :
                                             .arg(channel).arg(127.0/gain).arg(1.0/gain));
                     _serialConnection->sendData(QString("term0.gain%1 = %2\n").arg(channel).arg(gain, 0, 'g', 6).toLatin1());
                 });
+                _gainBoxes[channel] = gainBox;
                 grid->addWidget(gainBox, row, 1);
 
                 // gain alone cannot window a signal that does not straddle
@@ -268,6 +270,7 @@ MainWindow::MainWindow(QWidget *parent) :
                     offsetBox->setToolTip(tr("term0.offset%1: the window centres on %2").arg(channel).arg(-offset));
                     _serialConnection->sendData(QString("term0.offset%1 = %2\n").arg(channel).arg(offset, 0, 'g', 6).toLatin1());
                 });
+                _offsetBoxes[channel] = offsetBox;
                 grid->addWidget(offsetBox, row, 2);
             }
             int row = SCOPE_CHANNEL_COUNT + 1;
@@ -326,11 +329,12 @@ MainWindow::MainWindow(QWidget *parent) :
                     _waveLabels[channel]->setTextInteractionFlags(Qt::TextSelectableByMouse);
                     boxLayout->addWidget(_waveLabels[channel]);
                 }
-                QPushButton * const refresh = new QPushButton(tr("refresh"));
-                refresh->setToolTip(tr("re-read term0.wave from the drive"));
-                connect(refresh, &QPushButton::clicked, this, &MainWindow::slot_RefreshPinMapping);
-                boxLayout->addWidget(refresh);
                 grid->addWidget(box, row, 0, 1, 3);
+                row++;
+                QPushButton * const refresh = new QPushButton(tr("read from drive"));
+                refresh->setToolTip(tr("re-read term0.wave, term0.gain and term0.offset"));
+                connect(refresh, &QPushButton::clicked, this, &MainWindow::slot_RefreshScopeConfig);
+                grid->addWidget(refresh, row, 0, 1, 3);
                 row++;
             }
             grid->setRowStretch(row, 1);
@@ -518,7 +522,7 @@ void MainWindow::slot_SendClicked()
 
 void MainWindow::slot_SerialConnected()
 {
-    slot_RefreshPinMapping();
+    slot_RefreshScopeConfig();
     AppendTextToEdit(*_textLog, &QTextEdit::insertHtml, "<font color=\"FireBrick\">connected</font>");
     AppendTextToEdit(*_textLog, &QTextEdit::insertPlainText, "\n");
 }
@@ -534,11 +538,13 @@ void MainWindow::slot_LogLine(const QString &line)
     AppendTextToEdit(*_textLog, &QTextEdit::insertHtml, line);
 }
 
-void MainWindow::slot_RefreshPinMapping()
+void MainWindow::slot_RefreshScopeConfig()
 {
-    // a prefix query: hal.c matches on strlen of what you typed, so this
-    // returns all eight wave pins rather than needing eight round trips
+    // prefix queries: hal.c matches on strlen of what you typed, so each of
+    // these returns all eight pins rather than needing eight round trips
     _serialConnection->sendData("term0.wave\n");
+    _serialConnection->sendData("term0.gain\n");
+    _serialConnection->sendData("term0.offset\n");
 }
 
 void MainWindow::slot_ParseText(const QString &text)
@@ -551,23 +557,63 @@ void MainWindow::slot_ParseText(const QString &text)
         const QString line = _rxBuffer.left(newline);
         _rxBuffer.remove(0, newline + 1);
 
-        static const QRegularExpression waveRe(QStringLiteral("^\\s*term0\\.wave(\\d)\\b(.*)$"));
-        const QRegularExpressionMatch match = waveRe.match(line);
+        static const QRegularExpression pinRe(QStringLiteral("^\\s*term0\\.(wave|gain|offset)(\\d)\\b(.*)$"));
+        const QRegularExpressionMatch match = pinRe.match(line);
         if (!match.hasMatch())
             continue;
-        const int channel = match.captured(1).toInt();
+        const int channel = match.captured(2).toInt();
         if (channel < 0 || channel >= SCOPE_CHANNEL_COUNT)
             continue;
+        const QString field = match.captured(1);
+        const QString rest = match.captured(3);
 
-        // hal_print_pin writes "a.b <= c.d = value", and doubles the arrow for
-        // a pin linked through another, so the last one names the real source
-        static const QRegularExpression sourceRe(QStringLiteral("<=\\s*(\\S+)"));
-        QString source;
-        QRegularExpressionMatchIterator it = sourceRe.globalMatch(match.captured(2));
-        while (it.hasNext())
-            source = it.next().captured(1);
-        _waveLabels[channel]->setText(QString("%1: %2").arg(channel + 1)
-                                          .arg(source.isEmpty() ? QStringLiteral("\u2013") : source));
+        if (field == QLatin1String("wave"))
+        {
+            // hal_print_pin writes "a.b <= c.d = value", and doubles the arrow
+            // for a pin linked through another, so the last one names the real
+            // source
+            static const QRegularExpression sourceRe(QStringLiteral("<=\\s*(\\S+)"));
+            QString source;
+            QRegularExpressionMatchIterator it = sourceRe.globalMatch(rest);
+            while (it.hasNext())
+                source = it.next().captured(1);
+            _waveLabels[channel]->setText(QString("%1: %2").arg(channel + 1)
+                                              .arg(source.isEmpty() ? QStringLiteral("\u2013") : source));
+            continue;
+        }
+
+        // every form ends in "= value", and the arrows are "<=", so the last
+        // equals sign is the one in front of the number whether the pin is
+        // linked or not
+        const int equals = rest.lastIndexOf(QLatin1Char('='));
+        if (equals < 0)
+            continue;
+        bool ok = false;
+        const double value = rest.mid(equals + 1).trimmed().toDouble(&ok);
+        if (!ok)
+            continue;
+
+        // adopt the drive's value without echoing it straight back at it
+        if (field == QLatin1String("gain"))
+        {
+            if (value == 0.0)
+                continue;
+            const QSignalBlocker blocker(_gainBoxes[channel]);
+            _gainBoxes[channel]->setCurrentText(QString::number(value, 'g', 6));
+            _gainBoxes[channel]->setToolTip(tr("term0.gain%1: window +-%2, resolution %3")
+                                                .arg(channel).arg(127.0/value).arg(1.0/value));
+            _oscilloscope->setChannelGain(channel, value);
+            _xyOscilloscope->setChannelGain(channel, value);
+        }
+        else // offset
+        {
+            const QSignalBlocker blocker(_offsetBoxes[channel]);
+            _offsetBoxes[channel]->setValue(value);
+            _offsetBoxes[channel]->setToolTip(tr("term0.offset%1: the window centres on %2")
+                                                  .arg(channel).arg(-value));
+            _oscilloscope->setChannelOffset(channel, value);
+            _xyOscilloscope->setChannelOffset(channel, value);
+        }
     }
     // a reply that never ends in a newline must not grow without bound
     if (_rxBuffer.size() > 4096)
