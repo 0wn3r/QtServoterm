@@ -97,7 +97,7 @@ protected:
     ClickableComboBox *_portList;
     Oscilloscope *_oscilloscope;
     XYOscilloscope *_xyOscilloscope;
-    QWidget *_xyPanel;
+    QWidget *_scopeConfigPanel;
     QTextEdit *_textLog;
     HistoryLineEdit *_lineEdit;
     QPushButton *_sendButton;
