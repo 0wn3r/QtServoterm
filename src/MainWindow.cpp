@@ -27,6 +27,7 @@
 #include <QPushButton>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QToolButton>
 #include <QDoubleSpinBox>
 #include <QGridLayout>
 #include <QLabel>
@@ -74,7 +75,7 @@ MainWindow::MainWindow(QWidget *parent) :
     _portList(new ClickableComboBox),
     _oscilloscope(new Oscilloscope),
     _xyOscilloscope(new XYOscilloscope),
-    _xyPanel(new QWidget),
+    _scopeConfigPanel(new QWidget),
     _textLog(new QTextEdit),
     _lineEdit(new HistoryLineEdit),
     _sendButton(new QPushButton("Send")),
@@ -127,7 +128,7 @@ MainWindow::MainWindow(QWidget *parent) :
     if (!_actions->viewOscilloscope->isChecked())
         _oscilloscope->setVisible(_actions->viewOscilloscope->isChecked());
     if (!_actions->viewXYScope->isChecked())
-        _xyPanel->setVisible(_actions->viewXYScope->isChecked());
+        _xyOscilloscope->setVisible(_actions->viewXYScope->isChecked());
     if (!_actions->viewConsole->isChecked())
         _textLog->setVisible(_actions->viewConsole->isChecked());
 
@@ -153,33 +154,56 @@ MainWindow::MainWindow(QWidget *parent) :
     }
     {
         QWidget * const dummy = new QWidget;
-        QVBoxLayout * const vbox = new QVBoxLayout(dummy);
+        // the scope controls fold away into a panel on the right, so eight
+        // channels of enable, gain and offset stop competing with the traces
+        // for height
+        QHBoxLayout * const outer = new QHBoxLayout(dummy);
+        QVBoxLayout * const vbox = new QVBoxLayout;
+        outer->addLayout(vbox, 1);
         {
-            // one column per channel, so eight gain and offset controls fit
-            // inside the scope's minimum width instead of running off the edge
-            QGridLayout * const grid = new QGridLayout;
+            QHBoxLayout * const hbox = new QHBoxLayout;
+            hbox->addWidget(_oscilloscope, 1);
+            hbox->addWidget(_xyOscilloscope);
+            vbox->addLayout(hbox);
+        }
+        vbox->addWidget(_textLog);
+        {
+            QHBoxLayout * const hbox = new QHBoxLayout;
+            hbox->addWidget(_lineEdit);
+            hbox->addWidget(_sendButton);
+            vbox->addLayout(hbox);
+        }
+        {
+            // a thin spine down the full height, so the panel folds away
+            // without hunting through a menu for it
+            QToolButton * const toggle = new QToolButton;
+            toggle->setCheckable(true);
+            toggle->setChecked(true);
+            toggle->setArrowType(Qt::RightArrow);
+            toggle->setFixedWidth(14);
+            toggle->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+            toggle->setToolTip(tr("show or hide the scope controls"));
+            connect(toggle, &QToolButton::toggled, this, [this, toggle] (bool shown) {
+                _scopeConfigPanel->setVisible(shown);
+                toggle->setArrowType(shown ? Qt::RightArrow : Qt::LeftArrow);
+            });
+            outer->addWidget(toggle);
+        }
+        {
+            // one row per channel: the panel is narrow, so the grid runs down
+            // rather than across
+            QGridLayout * const grid = new QGridLayout(_scopeConfigPanel);
+            grid->setContentsMargins(0, 0, 0, 0);
             QLabel * const gainLabel = new QLabel(tr("gain"));
             QLabel * const offsetLabel = new QLabel(tr("offset"));
             gainLabel->setToolTip(tr("term0.gain<n>: window is +-127/gain, resolution is 1/gain"));
             offsetLabel->setToolTip(tr("term0.offset<n>: the window centres on -offset"));
-            grid->addWidget(gainLabel, 1, 0);
-            grid->addWidget(offsetLabel, 2, 0);
-
-            // one axis cannot label eight channels that each carry their own
-            // gain, so it borrows one channel's scale on request. every
-            // channel's own value is still on the cursor readout.
-            QComboBox * const refBox = new QComboBox;
-            refBox->setToolTip(tr("y axis units follow this channel"));
-            refBox->addItem(QStringLiteral("\u2013"), -1); // normalised
-            for (int channel = 0; channel < SCOPE_CHANNEL_COUNT; channel++)
-                refBox->addItem(QString::number(channel + 1), channel);
-            connect(refBox, &QComboBox::currentIndexChanged, this, [this, refBox] (int index) {
-                _oscilloscope->setReferenceChannel(refBox->itemData(index).toInt());
-            });
-            grid->addWidget(refBox, 0, 0);
+            grid->addWidget(new QLabel(tr("ch")), 0, 0);
+            grid->addWidget(gainLabel, 0, 1);
+            grid->addWidget(offsetLabel, 0, 2);
             for (int channel = 0; channel < SCOPE_CHANNEL_COUNT; channel++)
             {
-                const int column = channel + 1;
+                const int row = channel + 1;
                 QCheckBox * const cb = new QCheckBox(QString::number(channel + 1));
                 cb->setChecked(true);
                 QPalette pal = cb->palette();
@@ -188,7 +212,7 @@ MainWindow::MainWindow(QWidget *parent) :
                 connect(cb, &QCheckBox::toggled, this, [this, channel] (bool enabled) {
                     _oscilloscope->setChannelEnabled(channel, enabled);
                 });
-                grid->addWidget(cb, 0, column);
+                grid->addWidget(cb, row, 0);
 
                 // term0.gain<n> is both the window and the resolution: the
                 // firmware sends CLAMP((value + offset)*gain + 128, 1, 254),
@@ -198,11 +222,7 @@ MainWindow::MainWindow(QWidget *parent) :
                 QComboBox * const gainBox = new QComboBox;
                 gainBox->setEditable(true);
                 gainBox->setInsertPolicy(QComboBox::NoInsert);
-                gainBox->setMaximumWidth(76);
-                gainBox->setToolTip(tr("term0.gain%1: window +-%2, resolution %3")
-                                        .arg(channel)
-                                        .arg(127.0/SCOPE_DEFAULT_GAIN)
-                                        .arg(1.0/SCOPE_DEFAULT_GAIN));
+                gainBox->setMinimumWidth(72);
                 for (int decade = -2; decade <= 3; decade++)
                 {
                     const double scale = std::pow(10.0, decade);
@@ -211,6 +231,8 @@ MainWindow::MainWindow(QWidget *parent) :
                     gainBox->addItem(QString::number(5.0*scale, 'g', 6));
                 }
                 gainBox->setCurrentText(QString::number(SCOPE_DEFAULT_GAIN, 'g', 6));
+                gainBox->setToolTip(tr("term0.gain%1: window +-%2, resolution %3")
+                                        .arg(channel).arg(127.0/SCOPE_DEFAULT_GAIN).arg(1.0/SCOPE_DEFAULT_GAIN));
                 // connected last so populating the list does not fire a send
                 connect(gainBox, &QComboBox::currentTextChanged, this, [this, channel, gainBox] (const QString &text) {
                     bool ok = false;
@@ -223,7 +245,7 @@ MainWindow::MainWindow(QWidget *parent) :
                                             .arg(channel).arg(127.0/gain).arg(1.0/gain));
                     _serialConnection->sendData(QString("term0.gain%1 = %2\n").arg(channel).arg(gain, 0, 'g', 6).toLatin1());
                 });
-                grid->addWidget(gainBox, 1, column);
+                grid->addWidget(gainBox, row, 1);
 
                 // gain alone cannot window a signal that does not straddle
                 // zero: a 293 V bus at the gain needed to fit it is 2 V per
@@ -233,7 +255,7 @@ MainWindow::MainWindow(QWidget *parent) :
                 offsetBox->setRange(-1000000.0, 1000000.0);
                 offsetBox->setDecimals(2);
                 offsetBox->setSingleStep(1.0);
-                offsetBox->setMaximumWidth(88);
+                offsetBox->setMinimumWidth(84);
                 offsetBox->setValue(SCOPE_DEFAULT_OFFSET);
                 offsetBox->setToolTip(tr("term0.offset%1: the window centres on %2")
                                           .arg(channel).arg(-SCOPE_DEFAULT_OFFSET));
@@ -244,22 +266,28 @@ MainWindow::MainWindow(QWidget *parent) :
                     offsetBox->setToolTip(tr("term0.offset%1: the window centres on %2").arg(channel).arg(-offset));
                     _serialConnection->sendData(QString("term0.offset%1 = %2\n").arg(channel).arg(offset, 0, 'g', 6).toLatin1());
                 });
-                grid->addWidget(offsetBox, 2, column);
+                grid->addWidget(offsetBox, row, 2);
             }
-            grid->setColumnStretch(SCOPE_CHANNEL_COUNT + 1, 1);
-            vbox->addLayout(grid);
-        }
-        {
-            QHBoxLayout * const hbox = new QHBoxLayout;
-            hbox->addWidget(_oscilloscope, 1);
+            int row = SCOPE_CHANNEL_COUNT + 1;
+            {
+                // one axis cannot label eight channels that each carry their
+                // own gain, so it borrows one channel's scale on request.
+                // every channel's own value is still on the cursor readout.
+                QComboBox * const refBox = new QComboBox;
+                refBox->setToolTip(tr("y axis units follow this channel"));
+                refBox->addItem(QStringLiteral("\u2013"), -1); // normalised
+                for (int channel = 0; channel < SCOPE_CHANNEL_COUNT; channel++)
+                    refBox->addItem(QString::number(channel + 1), channel);
+                connect(refBox, &QComboBox::currentIndexChanged, this, [this, refBox] (int index) {
+                    _oscilloscope->setReferenceChannel(refBox->itemData(index).toInt());
+                });
+                grid->addWidget(new QLabel(tr("axis")), row, 0);
+                grid->addWidget(refBox, row, 1);
+                row++;
+            }
             {
                 // the locus says nothing unless you know which two signals
-                // drew it, so the pair lives with the plot rather than in the
-                // channel grid above
-                QVBoxLayout * const xyBox = new QVBoxLayout(_xyPanel);
-                xyBox->setContentsMargins(0, 0, 0, 0);
-                xyBox->addWidget(_xyOscilloscope, 1);
-                QHBoxLayout * const xyChannels = new QHBoxLayout;
+                // drew it
                 QComboBox * const xBox = new QComboBox;
                 QComboBox * const yBox = new QComboBox;
                 for (int channel = 0; channel < SCOPE_CHANNEL_COUNT; channel++)
@@ -269,31 +297,25 @@ MainWindow::MainWindow(QWidget *parent) :
                 }
                 xBox->setCurrentIndex(0);
                 yBox->setCurrentIndex(1);
+                xBox->setToolTip(tr("x/y scope horizontal channel"));
+                yBox->setToolTip(tr("x/y scope vertical channel"));
                 // connected after, so seeding the pair does not clear the plot
                 connect(xBox, &QComboBox::currentIndexChanged, _xyOscilloscope, &XYOscilloscope::setXChannel);
                 connect(yBox, &QComboBox::currentIndexChanged, _xyOscilloscope, &XYOscilloscope::setYChannel);
-                xyChannels->addWidget(new QLabel(tr("x")));
-                xyChannels->addWidget(xBox, 1);
-                xyChannels->addWidget(new QLabel(tr("y")));
-                xyChannels->addWidget(yBox, 1);
-                xyBox->addLayout(xyChannels);
+                grid->addWidget(new QLabel(tr("x/y")), row, 0);
+                grid->addWidget(xBox, row, 1);
+                grid->addWidget(yBox, row, 2);
+                row++;
             }
-            hbox->addWidget(_xyPanel);
-            vbox->addLayout(hbox);
+            grid->setRowStretch(row, 1);
         }
-        vbox->addWidget(_textLog);
-        {
-            QHBoxLayout * const hbox = new QHBoxLayout;
-            hbox->addWidget(_lineEdit);
-            hbox->addWidget(_sendButton);
-            vbox->addLayout(hbox);
-        }
+        outer->addWidget(_scopeConfigPanel);
         setCentralWidget(dummy);
     }
 
     connect(_actions->fileQuit, &QAction::triggered, qApp, &QCoreApplication::quit, Qt::QueuedConnection);
     connect(_actions->viewOscilloscope, &QAction::toggled, _oscilloscope, &QWidget::setVisible);
-    connect(_actions->viewXYScope, &QAction::toggled, _xyPanel, &QWidget::setVisible);
+    connect(_actions->viewXYScope, &QAction::toggled, _xyOscilloscope, &QWidget::setVisible);
     connect(_actions->viewConsole, &QAction::toggled, _textLog, &QWidget::setVisible);
     connect(_menuBar->portMenu, &QMenu::aboutToShow, this, &MainWindow::slot_PortListClicked);
     connect(_menuBar->portGroup, &QActionGroup::triggered, this, &MainWindow::slot_PortMenuItemSelected);
