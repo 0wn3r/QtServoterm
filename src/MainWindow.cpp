@@ -26,6 +26,9 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QCheckBox>
+#include <QComboBox>
+
+#include <cmath>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QShortcut>
@@ -159,6 +162,40 @@ MainWindow::MainWindow(QWidget *parent) :
                     _oscilloscope->setChannelEnabled(channel, enabled);
                 });
                 hbox->addWidget(cb);
+
+                // term0.gain<n> is both the window and the resolution: the
+                // firmware sends CLAMP((value + offset)*gain + 128, 1, 254),
+                // so the channel spans +-127/gain at 1/gain per count. a 1-2-5
+                // sequence makes it a scope style knob the wheel can step,
+                // while the field still accepts an arbitrary value.
+                QComboBox * const gainBox = new QComboBox;
+                gainBox->setEditable(true);
+                gainBox->setInsertPolicy(QComboBox::NoInsert);
+                gainBox->setMaximumWidth(76);
+                gainBox->setToolTip(tr("term0.gain%1: window +-%2, resolution %3")
+                                        .arg(channel)
+                                        .arg(127.0/SCOPE_DEFAULT_GAIN)
+                                        .arg(1.0/SCOPE_DEFAULT_GAIN));
+                for (int decade = -2; decade <= 3; decade++)
+                {
+                    const double scale = std::pow(10.0, decade);
+                    gainBox->addItem(QString::number(1.0*scale, 'g', 6));
+                    gainBox->addItem(QString::number(2.0*scale, 'g', 6));
+                    gainBox->addItem(QString::number(5.0*scale, 'g', 6));
+                }
+                gainBox->setCurrentText(QString::number(SCOPE_DEFAULT_GAIN, 'g', 6));
+                // connected last so populating the list does not fire a send
+                connect(gainBox, &QComboBox::currentTextChanged, this, [this, channel, gainBox] (const QString &text) {
+                    bool ok = false;
+                    const double gain = text.toDouble(&ok);
+                    if (!ok || gain == 0.0)
+                        return;
+                    _oscilloscope->setChannelGain(channel, gain);
+                    gainBox->setToolTip(tr("term0.gain%1: window +-%2, resolution %3")
+                                            .arg(channel).arg(127.0/gain).arg(1.0/gain));
+                    _serialConnection->sendData(QString("term0.gain%1 = %2\n").arg(channel).arg(gain, 0, 'g', 6).toLatin1());
+                });
+                hbox->addWidget(gainBox);
             }
             hbox->addStretch(1);
             vbox->addLayout(hbox);
