@@ -29,6 +29,8 @@ QT_BEGIN_NAMESPACE
 class QPushButton;
 class QCheckBox;
 class QLabel;
+class QComboBox;
+class QDoubleSpinBox;
 class QTextEdit;
 class QShortcut;
 class QSettings;
@@ -70,7 +72,7 @@ protected slots:
     void slot_SerialDisconnected();
     void slot_LogLine(const QString &line);
     void slot_ParseText(const QString &text);
-    void slot_RefreshPinMapping();
+    void slot_RefreshScopeConfig();
     void slot_LogError(const QString &errorMessage);
     void slot_ScopePacketReceived(const QVector<float> &packet);
     void slot_ScopeResetReceived();
@@ -104,6 +106,8 @@ protected:
     XYOscilloscope *_xyOscilloscope;
     QWidget *_scopeConfigPanel;
     QLabel *_waveLabels[SCOPE_CHANNEL_COUNT];
+    QComboBox *_gainBoxes[SCOPE_CHANNEL_COUNT];
+    QDoubleSpinBox *_offsetBoxes[SCOPE_CHANNEL_COUNT];
     QString _rxBuffer;
     QTextEdit *_textLog;
     HistoryLineEdit *_lineEdit;
