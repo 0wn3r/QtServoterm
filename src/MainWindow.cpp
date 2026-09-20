@@ -28,6 +28,8 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QToolButton>
+#include <QGroupBox>
+#include <QRegularExpression>
 #include <QDoubleSpinBox>
 #include <QGridLayout>
 #include <QLabel>
@@ -307,6 +309,30 @@ MainWindow::MainWindow(QWidget *parent) :
                 grid->addWidget(yBox, row, 2);
                 row++;
             }
+            {
+                // which pin each trace is actually carrying. hal_print_pin
+                // answers a prefix query, so one "term0.wave" fetches all
+                // eight links in a single reply.
+                QGroupBox * const box = new QGroupBox(tr("measuring"));
+                QVBoxLayout * const boxLayout = new QVBoxLayout(box);
+                boxLayout->setContentsMargins(6, 4, 6, 4);
+                boxLayout->setSpacing(1);
+                for (int channel = 0; channel < SCOPE_CHANNEL_COUNT; channel++)
+                {
+                    _waveLabels[channel] = new QLabel(QString("%1: ?").arg(channel + 1));
+                    QPalette pal = _waveLabels[channel]->palette();
+                    pal.setColor(QPalette::WindowText, SCOPE_CHANNEL_COLORS[channel]);
+                    _waveLabels[channel]->setPalette(pal);
+                    _waveLabels[channel]->setTextInteractionFlags(Qt::TextSelectableByMouse);
+                    boxLayout->addWidget(_waveLabels[channel]);
+                }
+                QPushButton * const refresh = new QPushButton(tr("refresh"));
+                refresh->setToolTip(tr("re-read term0.wave from the drive"));
+                connect(refresh, &QPushButton::clicked, this, &MainWindow::slot_RefreshPinMapping);
+                boxLayout->addWidget(refresh);
+                grid->addWidget(box, row, 0, 1, 3);
+                row++;
+            }
             grid->setRowStretch(row, 1);
         }
         outer->addWidget(_scopeConfigPanel);
@@ -338,6 +364,7 @@ MainWindow::MainWindow(QWidget *parent) :
     connect(_textLog, &QTextEdit::textChanged, this, &MainWindow::slot_UpdateButtons);
     connect(_estopShortcut, &QShortcut::activated, this, &MainWindow::slot_EmergencyStop);
     connect(_serialConnection, &SerialConnection::lineReceived, this, &MainWindow::slot_LogLine);
+    connect(_serialConnection, &SerialConnection::textReceived, this, &MainWindow::slot_ParseText);
     connect(_serialConnection, &SerialConnection::configLineReceived, _configDialog, &ConfigDialog::appendConfigLine);
     connect(_serialConnection, &SerialConnection::connected, this, &MainWindow::slot_SerialConnected);
     connect(_serialConnection, &SerialConnection::disconnected, this, &MainWindow::slot_SerialDisconnected);
@@ -491,6 +518,7 @@ void MainWindow::slot_SendClicked()
 
 void MainWindow::slot_SerialConnected()
 {
+    slot_RefreshPinMapping();
     AppendTextToEdit(*_textLog, &QTextEdit::insertHtml, "<font color=\"FireBrick\">connected</font>");
     AppendTextToEdit(*_textLog, &QTextEdit::insertPlainText, "\n");
 }
@@ -504,6 +532,46 @@ void MainWindow::slot_SerialDisconnected()
 void MainWindow::slot_LogLine(const QString &line)
 {
     AppendTextToEdit(*_textLog, &QTextEdit::insertHtml, line);
+}
+
+void MainWindow::slot_RefreshPinMapping()
+{
+    // a prefix query: hal.c matches on strlen of what you typed, so this
+    // returns all eight wave pins rather than needing eight round trips
+    _serialConnection->sendData("term0.wave\n");
+}
+
+void MainWindow::slot_ParseText(const QString &text)
+{
+    // the serial layer hands over whatever bytes arrived, not whole lines
+    _rxBuffer += text;
+    int newline;
+    while ((newline = _rxBuffer.indexOf('\n')) >= 0)
+    {
+        const QString line = _rxBuffer.left(newline);
+        _rxBuffer.remove(0, newline + 1);
+
+        static const QRegularExpression waveRe(QStringLiteral("^\\s*term0\\.wave(\\d)\\b(.*)$"));
+        const QRegularExpressionMatch match = waveRe.match(line);
+        if (!match.hasMatch())
+            continue;
+        const int channel = match.captured(1).toInt();
+        if (channel < 0 || channel >= SCOPE_CHANNEL_COUNT)
+            continue;
+
+        // hal_print_pin writes "a.b <= c.d = value", and doubles the arrow for
+        // a pin linked through another, so the last one names the real source
+        static const QRegularExpression sourceRe(QStringLiteral("<=\\s*(\\S+)"));
+        QString source;
+        QRegularExpressionMatchIterator it = sourceRe.globalMatch(match.captured(2));
+        while (it.hasNext())
+            source = it.next().captured(1);
+        _waveLabels[channel]->setText(QString("%1: %2").arg(channel + 1)
+                                          .arg(source.isEmpty() ? QStringLiteral("\u2013") : source));
+    }
+    // a reply that never ends in a newline must not grow without bound
+    if (_rxBuffer.size() > 4096)
+        _rxBuffer.clear();
 }
 
 void MainWindow::slot_LogError(const QString &errorMessage)
