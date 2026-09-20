@@ -42,6 +42,9 @@ public slots:
     void setChannelEnabled(int channel, bool enabled);
     void setChannelGain(int channel, double gain);
     void setChannelOffset(int channel, double offset);
+    // -1 labels the axis in normalised units, otherwise it follows this
+    // channel's gain and offset into engineering units
+    void setReferenceChannel(int channel);
 protected:
     void paintEvent(QPaintEvent *event);
     void resizeEvent(QResizeEvent *event);
@@ -52,11 +55,19 @@ protected:
     // x differ by _PlotLeft() everywhere below
     int _PlotLeft() const;
     int _PlotWidth() const;
+    QString _AxisLabel(double normalised) const;
+    // the margin is as wide as the widest label it has to hold, so it moves
+    // when the reference channel or its scaling does. cached, since _PlotLeft
+    // is on the per sample path.
+    void _RecalcPlotLeft();
+    void _ReflowPlot();
     void _DrawGrid(QPainter &painter);
     void _DrawCursor(QPainter &painter);
     QVector< QVector<float> > _channelsSamples;
     int _scopeX;
     int _cursorSample;
+    int _referenceChannel;
+    int _plotLeft;
     bool _channelEnabled[SCOPE_CHANNEL_COUNT];
     double _channelGain[SCOPE_CHANNEL_COUNT];
     double _channelOffset[SCOPE_CHANNEL_COUNT];

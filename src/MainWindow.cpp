@@ -163,6 +163,19 @@ MainWindow::MainWindow(QWidget *parent) :
             offsetLabel->setToolTip(tr("term0.offset<n>: the window centres on -offset"));
             grid->addWidget(gainLabel, 1, 0);
             grid->addWidget(offsetLabel, 2, 0);
+
+            // one axis cannot label eight channels that each carry their own
+            // gain, so it borrows one channel's scale on request. every
+            // channel's own value is still on the cursor readout.
+            QComboBox * const refBox = new QComboBox;
+            refBox->setToolTip(tr("y axis units follow this channel"));
+            refBox->addItem(QStringLiteral("\u2013"), -1); // normalised
+            for (int channel = 0; channel < SCOPE_CHANNEL_COUNT; channel++)
+                refBox->addItem(QString::number(channel + 1), channel);
+            connect(refBox, &QComboBox::currentIndexChanged, this, [this, refBox] (int index) {
+                _oscilloscope->setReferenceChannel(refBox->itemData(index).toInt());
+            });
+            grid->addWidget(refBox, 0, 0);
             for (int channel = 0; channel < SCOPE_CHANNEL_COUNT; channel++)
             {
                 const int column = channel + 1;
