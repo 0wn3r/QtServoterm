@@ -27,6 +27,9 @@
 #include <QPushButton>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDoubleSpinBox>
+#include <QGridLayout>
+#include <QLabel>
 
 #include <cmath>
 #include <QVBoxLayout>
@@ -143,6 +146,7 @@ MainWindow::MainWindow(QWidget *parent) :
         toolbar->addAction(_actions->driveEnable);
         toolbar->addAction(_actions->driveJogEnable);
         toolbar->addAction(_actions->viewXYScope);
+        toolbar->addAction(_actions->viewScopePause);
         toolbar->addAction(_actions->driveEditConfig);
         addToolBar(toolbar);
     }
@@ -150,9 +154,18 @@ MainWindow::MainWindow(QWidget *parent) :
         QWidget * const dummy = new QWidget;
         QVBoxLayout * const vbox = new QVBoxLayout(dummy);
         {
-            QHBoxLayout * const hbox = new QHBoxLayout;
+            // one column per channel, so eight gain and offset controls fit
+            // inside the scope's minimum width instead of running off the edge
+            QGridLayout * const grid = new QGridLayout;
+            QLabel * const gainLabel = new QLabel(tr("gain"));
+            QLabel * const offsetLabel = new QLabel(tr("offset"));
+            gainLabel->setToolTip(tr("term0.gain<n>: window is +-127/gain, resolution is 1/gain"));
+            offsetLabel->setToolTip(tr("term0.offset<n>: the window centres on -offset"));
+            grid->addWidget(gainLabel, 1, 0);
+            grid->addWidget(offsetLabel, 2, 0);
             for (int channel = 0; channel < SCOPE_CHANNEL_COUNT; channel++)
             {
+                const int column = channel + 1;
                 QCheckBox * const cb = new QCheckBox(QString::number(channel + 1));
                 cb->setChecked(true);
                 QPalette pal = cb->palette();
@@ -161,7 +174,7 @@ MainWindow::MainWindow(QWidget *parent) :
                 connect(cb, &QCheckBox::toggled, this, [this, channel] (bool enabled) {
                     _oscilloscope->setChannelEnabled(channel, enabled);
                 });
-                hbox->addWidget(cb);
+                grid->addWidget(cb, 0, column);
 
                 // term0.gain<n> is both the window and the resolution: the
                 // firmware sends CLAMP((value + offset)*gain + 128, 1, 254),
@@ -195,10 +208,30 @@ MainWindow::MainWindow(QWidget *parent) :
                                             .arg(channel).arg(127.0/gain).arg(1.0/gain));
                     _serialConnection->sendData(QString("term0.gain%1 = %2\n").arg(channel).arg(gain, 0, 'g', 6).toLatin1());
                 });
-                hbox->addWidget(gainBox);
+                grid->addWidget(gainBox, 1, column);
+
+                // gain alone cannot window a signal that does not straddle
+                // zero: a 293 V bus at the gain needed to fit it is 2 V per
+                // count. the offset moves the window's centre so the gain can
+                // be spent on resolution instead of reach.
+                QDoubleSpinBox * const offsetBox = new QDoubleSpinBox;
+                offsetBox->setRange(-1000000.0, 1000000.0);
+                offsetBox->setDecimals(2);
+                offsetBox->setSingleStep(1.0);
+                offsetBox->setMaximumWidth(88);
+                offsetBox->setValue(SCOPE_DEFAULT_OFFSET);
+                offsetBox->setToolTip(tr("term0.offset%1: the window centres on %2")
+                                          .arg(channel).arg(-SCOPE_DEFAULT_OFFSET));
+                // connected after setValue, for the same reason as the gain
+                connect(offsetBox, &QDoubleSpinBox::valueChanged, this, [this, channel, offsetBox] (double offset) {
+                    _oscilloscope->setChannelOffset(channel, offset);
+                    offsetBox->setToolTip(tr("term0.offset%1: the window centres on %2").arg(channel).arg(-offset));
+                    _serialConnection->sendData(QString("term0.offset%1 = %2\n").arg(channel).arg(offset, 0, 'g', 6).toLatin1());
+                });
+                grid->addWidget(offsetBox, 2, column);
             }
-            hbox->addStretch(1);
-            vbox->addLayout(hbox);
+            grid->setColumnStretch(SCOPE_CHANNEL_COUNT + 1, 1);
+            vbox->addLayout(grid);
         }
         {
             QHBoxLayout * const hbox = new QHBoxLayout;
@@ -417,8 +450,14 @@ void MainWindow::slot_LogError(const QString &errorMessage)
 
 void MainWindow::slot_ScopePacketReceived(const QVector<float> &packet)
 {
-    _oscilloscope->addChannelsSample(packet);
-    _xyOscilloscope->addChannelsSample(packet);
+    // pause freezes the view so the cursor can be walked across a captured
+    // event. it deliberately does not stop a recording in progress -- the csv
+    // below keeps taking every sample.
+    if (!_actions->viewScopePause->isChecked())
+    {
+        _oscilloscope->addChannelsSample(packet);
+        _xyOscilloscope->addChannelsSample(packet);
+    }
     if (_csvFile->isOpen() && !packet.isEmpty())
     {
         QStringList fields;

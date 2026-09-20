@@ -44,6 +44,7 @@ public:
     QAction *dataOpenDirectory;
     QAction *viewOscilloscope;
     QAction *viewXYScope;
+    QAction *viewScopePause;
     QAction *viewConsole;
     QAction *viewClearConsole;
     QAction *viewThemeSystem;

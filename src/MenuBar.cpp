@@ -52,6 +52,7 @@ MenuBar::MenuBar(Actions *actions, QWidget *parent) : QMenuBar(parent)
     QMenu * const viewMenu = addMenu("&View");
     viewMenu->addAction(actions->viewOscilloscope);
     viewMenu->addAction(actions->viewXYScope);
+    viewMenu->addAction(actions->viewScopePause);
     viewMenu->addAction(actions->viewConsole);
     viewMenu->addSeparator();
     viewMenu->addAction(actions->viewClearConsole);
