@@ -27,7 +27,7 @@
 
 namespace STMBL_Servoterm {
 
-Oscilloscope::Oscilloscope(QWidget *parent) : QWidget(parent), _scopeX(0), _cursorSample(-1)
+Oscilloscope::Oscilloscope(QWidget *parent) : QWidget(parent), _scopeX(0), _cursorSample(-1), _referenceChannel(-1), _plotLeft(0)
 {
     setMinimumSize(600, 256);
     QPalette pal = palette();
@@ -41,11 +41,53 @@ Oscilloscope::Oscilloscope(QWidget *parent) : QWidget(parent), _scopeX(0), _curs
         _channelGain[channel] = SCOPE_DEFAULT_GAIN;
         _channelOffset[channel] = SCOPE_DEFAULT_OFFSET;
     }
+    _RecalcPlotLeft();
+}
+
+QString Oscilloscope::_AxisLabel(double normalised) const
+{
+    if (_referenceChannel < 0 || _referenceChannel >= SCOPE_CHANNEL_COUNT)
+        return QString::number(normalised, 'f', 2);
+    const double gain = (_channelGain[_referenceChannel] != 0.0) ? _channelGain[_referenceChannel] : 1.0;
+    return QString::number(normalised*128.0/gain - _channelOffset[_referenceChannel], 'g', 4);
+}
+
+void Oscilloscope::_RecalcPlotLeft()
+{
+    const QFontMetrics fm = fontMetrics();
+    int widest = 0;
+    for (int i = -4; i <= 4; i++)
+        widest = qMax(widest, fm.horizontalAdvance(_AxisLabel(i/4.0)));
+    _plotLeft = widest + 6;
+}
+
+void Oscilloscope::_ReflowPlot()
+{
+    // a wider margin means a narrower plot, so the ring has to be trimmed to
+    // match or samples would sit past the right hand edge
+    _RecalcPlotLeft();
+    const int w = _PlotWidth();
+    if (_channelsSamples.size() > w)
+        _channelsSamples.resize(w);
+    if (_scopeX >= w)
+        _scopeX = 0;
+    if (_cursorSample >= _channelsSamples.size())
+        _cursorSample = -1;
+    update();
 }
 
 int Oscilloscope::_PlotLeft() const
 {
-    return fontMetrics().horizontalAdvance(QStringLiteral("-1.00")) + 6;
+    return _plotLeft;
+}
+
+void Oscilloscope::setReferenceChannel(int channel)
+{
+    const int wanted = (channel >= 0 && channel < SCOPE_CHANNEL_COUNT) ? channel : -1;
+    if (_referenceChannel == wanted)
+        return;
+    _referenceChannel = wanted;
+    _ReflowPlot();
 }
 
 int Oscilloscope::_PlotWidth() const
@@ -58,7 +100,10 @@ void Oscilloscope::setChannelGain(int channel, double gain)
     if (channel < 0 || channel >= SCOPE_CHANNEL_COUNT || gain == 0.0 || _channelGain[channel] == gain)
         return;
     _channelGain[channel] = gain;
-    update();
+    if (channel == _referenceChannel)
+        _ReflowPlot();
+    else
+        update();
 }
 
 void Oscilloscope::setChannelOffset(int channel, double offset)
@@ -66,7 +111,10 @@ void Oscilloscope::setChannelOffset(int channel, double offset)
     if (channel < 0 || channel >= SCOPE_CHANNEL_COUNT || _channelOffset[channel] == offset)
         return;
     _channelOffset[channel] = offset;
-    update();
+    if (channel == _referenceChannel)
+        _ReflowPlot();
+    else
+        update();
 }
 
 void Oscilloscope::setChannelEnabled(int channel, bool enabled)
@@ -162,17 +210,20 @@ void Oscilloscope::_DrawGrid(QPainter &painter)
     const int plotLeft = _PlotLeft();
     const QFontMetrics fm = fontMetrics();
 
-    // the axis is in normalised units because the eight channels each carry
-    // their own gain and offset, so no single scale can label them all. the
-    // engineering values are on the cursor readout instead.
+    // with no reference channel the axis is in normalised units, because the
+    // eight channels each carry their own gain and offset and no single scale
+    // can label them all. picking a reference borrows that channel's scale for
+    // the axis; every channel's own value stays on the cursor readout.
     for (int i = -4; i <= 4; i++)
     {
         const double v = i/4.0;
         const int y = qBound(0, static_cast<int>(h/2 - (h/2)*v), h-1);
         painter.setPen((i == 0) ? QColor(160, 160, 160) : QColor(224, 224, 224));
         painter.drawLine(plotLeft, y, w-1, y);
-        painter.setPen(QColor(110, 110, 110));
-        const QString label = QString::number(v, 'f', 2);
+        // in the reference channel's own colour, so it is obvious whose units
+        // the axis is carrying
+        painter.setPen((_referenceChannel >= 0) ? SCOPE_CHANNEL_COLORS[_referenceChannel] : QColor(110, 110, 110));
+        const QString label = _AxisLabel(v);
         painter.drawText(plotLeft - 4 - fm.horizontalAdvance(label),
                          qBound(fm.ascent(), y + fm.ascent()/2, h-1),
                          label);
@@ -287,6 +338,7 @@ void Oscilloscope::paintEvent(QPaintEvent *event)
 
 void Oscilloscope::resizeEvent(QResizeEvent *event)
 {
+    _RecalcPlotLeft(); // the font can change out from under us with the style
     const int w = qMax(1, event->size().width() - _PlotLeft());
 
     // possibly reduce the data window length
