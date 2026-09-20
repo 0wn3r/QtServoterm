@@ -29,6 +29,7 @@
 
 QT_BEGIN_NAMESPACE
 class QTimer;
+class QMouseEvent;
 QT_END_NAMESPACE
 
 namespace STMBL_Servoterm {
@@ -41,15 +42,35 @@ public:
 public slots:
     void addChannelsSample(const QVector<float> &channelsSample);
     void resetScanning();
+    void setXChannel(int channel);
+    void setYChannel(int channel);
+    void setChannelGain(int channel, double gain);
+    void setChannelOffset(int channel, double offset);
 protected slots:
     void slot_FadeTimeout();
 protected:
     void paintEvent(QPaintEvent *event);
     void resizeEvent(QResizeEvent *event);
+    void mouseMoveEvent(QMouseEvent *event);
+    void leaveEvent(QEvent *event);
     QRect _ImageRectToWidgetRect(const QRect &r) const;
+    // the locus is judged by its shape, so the plot has to be square or a
+    // stretched widget reads as a gain mismatch that is not there
+    QRect _PlotRect() const;
+    QString _AxisLabel(int channel, double normalised) const;
+    void _RecalcMargins();
     QImage _plot;
     QTimer *_timer;
     QSet<QPoint> _points;
+    int _xChannel;
+    int _yChannel;
+    int _leftMargin;
+    int _bottomMargin;
+    QPoint _cursor;
+    bool _xClipped;
+    bool _yClipped;
+    double _channelGain[SCOPE_CHANNEL_COUNT];
+    double _channelOffset[SCOPE_CHANNEL_COUNT];
 };
 
 } // namespace STMBL_Servoterm
