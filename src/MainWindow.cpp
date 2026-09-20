@@ -87,6 +87,8 @@ MainWindow::MainWindow(QWidget *parent) :
     _jogTimer(new QTimer(this)),
     _csvFile(new QFile(this)),
     _estopShortcut(new QShortcut(QKeySequence("Esc"), this)),
+    _sendStep(0.0),
+    _csvSampleIndex(0),
     _leftPressed(false),
     _rightPressed(false),
     _theme(THEME_SYSTEM)
@@ -207,6 +209,9 @@ MainWindow::MainWindow(QWidget *parent) :
             for (int channel = 0; channel < SCOPE_CHANNEL_COUNT; channel++)
             {
                 const int row = channel + 1;
+                _wavePins[channel] = QStringLiteral("?");
+                _channelGain[channel] = SCOPE_DEFAULT_GAIN;
+                _channelOffset[channel] = SCOPE_DEFAULT_OFFSET;
                 QCheckBox * const cb = new QCheckBox(QString::number(channel + 1));
                 cb->setChecked(true);
                 QPalette pal = cb->palette();
@@ -242,6 +247,8 @@ MainWindow::MainWindow(QWidget *parent) :
                     const double gain = text.toDouble(&ok);
                     if (!ok || gain == 0.0)
                         return;
+                    _NoteCsvScalingChange(channel, QStringLiteral("gain"), _channelGain[channel], gain);
+                    _channelGain[channel] = gain;
                     _oscilloscope->setChannelGain(channel, gain);
                     _xyOscilloscope->setChannelGain(channel, gain);
                     gainBox->setToolTip(tr("term0.gain%1: window +-%2, resolution %3")
@@ -265,6 +272,8 @@ MainWindow::MainWindow(QWidget *parent) :
                                           .arg(channel).arg(-SCOPE_DEFAULT_OFFSET));
                 // connected after setValue, for the same reason as the gain
                 connect(offsetBox, &QDoubleSpinBox::valueChanged, this, [this, channel, offsetBox] (double offset) {
+                    _NoteCsvScalingChange(channel, QStringLiteral("offset"), _channelOffset[channel], offset);
+                    _channelOffset[channel] = offset;
                     _oscilloscope->setChannelOffset(channel, offset);
                     _xyOscilloscope->setChannelOffset(channel, offset);
                     offsetBox->setToolTip(tr("term0.offset%1: the window centres on %2").arg(channel).arg(-offset));
@@ -491,6 +500,11 @@ void MainWindow::slot_DataRecordToggled(bool recording)
             _actions->dataRecord->setChecked(false);
             return;
         }
+        _csvSampleIndex = 0;
+        _WriteCsvHeader();
+        // so the header describes what the drive actually has rather than what
+        // was last read. any answer that lands mid recording is noted inline.
+        slot_RefreshScopeConfig();
     }
 }
 
@@ -538,6 +552,45 @@ void MainWindow::slot_LogLine(const QString &line)
     AppendTextToEdit(*_textLog, &QTextEdit::insertHtml, line);
 }
 
+void MainWindow::_WriteCsvHeader()
+{
+    if (!_csvFile->isOpen())
+        return;
+    QStringList header;
+    header.append(QStringLiteral("# stmbl servoterm recording"));
+    header.append("# " + QDateTime::currentDateTime().toString(Qt::ISODate));
+    // the drive samples every send_step rt ticks, so this is the time base the
+    // row index has to be read against
+    header.append(_sendStep > 0.0 ? QString("# term0.send_step = %1").arg(_sendStep, 0, 'g', 6)
+                                  : QStringLiteral("# term0.send_step unknown"));
+    header.append(QStringLiteral("# values are engineering units: normalised*128/gain - offset"));
+    for (int channel = 0; channel < SCOPE_CHANNEL_COUNT; channel++)
+    {
+        header.append(QString("# ch%1 %2 gain %3 offset %4")
+                          .arg(channel + 1)
+                          .arg(_wavePins[channel])
+                          .arg(_channelGain[channel], 0, 'g', 6)
+                          .arg(_channelOffset[channel], 0, 'g', 6));
+    }
+    QStringList columns;
+    columns.append(QStringLiteral("sample"));
+    for (int channel = 0; channel < SCOPE_CHANNEL_COUNT; channel++)
+        columns.append(QString("ch%1").arg(channel + 1));
+    header.append(columns.join(','));
+    _csvFile->write((header.join('\n') + "\n").toUtf8());
+}
+
+void MainWindow::_NoteCsvScalingChange(int channel, const QString &what, double from, double to)
+{
+    // a scaling change mid recording means the rows above and below mean
+    // different things, so the file has to say where it happened
+    if (!_csvFile->isOpen() || from == to)
+        return;
+    _csvFile->write(QString("# at sample %1: ch%2 %3 %4 -> %5\n")
+                        .arg(_csvSampleIndex).arg(channel + 1).arg(what)
+                        .arg(from, 0, 'g', 6).arg(to, 0, 'g', 6).toUtf8());
+}
+
 void MainWindow::slot_RefreshScopeConfig()
 {
     // prefix queries: hal.c matches on strlen of what you typed, so each of
@@ -545,6 +598,7 @@ void MainWindow::slot_RefreshScopeConfig()
     _serialConnection->sendData("term0.wave\n");
     _serialConnection->sendData("term0.gain\n");
     _serialConnection->sendData("term0.offset\n");
+    _serialConnection->sendData("term0.send_step\n");
 }
 
 void MainWindow::slot_ParseText(const QString &text)
@@ -556,6 +610,17 @@ void MainWindow::slot_ParseText(const QString &text)
     {
         const QString line = _rxBuffer.left(newline);
         _rxBuffer.remove(0, newline + 1);
+
+        static const QRegularExpression stepRe(QStringLiteral("^\\s*term0\\.send_step\\b.*=\\s*([-0-9.eE+]+)"));
+        const QRegularExpressionMatch stepMatch = stepRe.match(line);
+        if (stepMatch.hasMatch())
+        {
+            bool stepOk = false;
+            const double step = stepMatch.captured(1).toDouble(&stepOk);
+            if (stepOk)
+                _sendStep = step;
+            continue;
+        }
 
         static const QRegularExpression pinRe(QStringLiteral("^\\s*term0\\.(wave|gain|offset)(\\d)\\b(.*)$"));
         const QRegularExpressionMatch match = pinRe.match(line);
@@ -577,8 +642,8 @@ void MainWindow::slot_ParseText(const QString &text)
             QRegularExpressionMatchIterator it = sourceRe.globalMatch(rest);
             while (it.hasNext())
                 source = it.next().captured(1);
-            _waveLabels[channel]->setText(QString("%1: %2").arg(channel + 1)
-                                              .arg(source.isEmpty() ? QStringLiteral("\u2013") : source));
+            _wavePins[channel] = source.isEmpty() ? QStringLiteral("\u2013") : source;
+            _waveLabels[channel]->setText(QString("%1: %2").arg(channel + 1).arg(_wavePins[channel]));
             continue;
         }
 
@@ -598,6 +663,8 @@ void MainWindow::slot_ParseText(const QString &text)
         {
             if (value == 0.0)
                 continue;
+            _NoteCsvScalingChange(channel, QStringLiteral("gain"), _channelGain[channel], value);
+            _channelGain[channel] = value;
             const QSignalBlocker blocker(_gainBoxes[channel]);
             _gainBoxes[channel]->setCurrentText(QString::number(value, 'g', 6));
             _gainBoxes[channel]->setToolTip(tr("term0.gain%1: window +-%2, resolution %3")
@@ -607,6 +674,8 @@ void MainWindow::slot_ParseText(const QString &text)
         }
         else // offset
         {
+            _NoteCsvScalingChange(channel, QStringLiteral("offset"), _channelOffset[channel], value);
+            _channelOffset[channel] = value;
             const QSignalBlocker blocker(_offsetBoxes[channel]);
             _offsetBoxes[channel]->setValue(value);
             _offsetBoxes[channel]->setToolTip(tr("term0.offset%1: the window centres on %2")
@@ -638,10 +707,15 @@ void MainWindow::slot_ScopePacketReceived(const QVector<float> &packet)
     }
     if (_csvFile->isOpen() && !packet.isEmpty())
     {
+        // engineering units, not the wire's normalised bytes: a file of
+        // normalised numbers cannot be read back without separately
+        // remembering what every channel was scaled by
         QStringList fields;
-        for (QVector<float>::const_iterator it = packet.begin(); it != packet.end(); ++it)
+        fields.append(QString::number(_csvSampleIndex++));
+        for (int channel = 0; channel < packet.size(); channel++)
         {
-            fields.append(QString::number(*it, 'f'));
+            const double gain = (_channelGain[channel] != 0.0) ? _channelGain[channel] : 1.0;
+            fields.append(QString::number(static_cast<double>(packet.at(channel))*128.0/gain - _channelOffset[channel], 'g', 6));
         }
         _csvFile->write((fields.join(',') + "\n").toUtf8());
     }
