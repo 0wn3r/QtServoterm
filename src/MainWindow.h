@@ -87,6 +87,8 @@ protected:
     void closeEvent(QCloseEvent *event);
     bool eventFilter(QObject *obj, QEvent *event);
     void _RepopulateDeviceList();
+    void _WriteCsvHeader();
+    void _NoteCsvScalingChange(int channel, const QString &what, double from, double to);
     void _saveSettings();
     void _loadSettings();
     void _ApplyTheme(int theme);
@@ -106,6 +108,13 @@ protected:
     XYOscilloscope *_xyOscilloscope;
     QWidget *_scopeConfigPanel;
     QLabel *_waveLabels[SCOPE_CHANNEL_COUNT];
+    // mirrored here so a recording can be written in engineering units and can
+    // name the pin behind each column
+    QString _wavePins[SCOPE_CHANNEL_COUNT];
+    double _channelGain[SCOPE_CHANNEL_COUNT];
+    double _channelOffset[SCOPE_CHANNEL_COUNT];
+    double _sendStep;
+    qint64 _csvSampleIndex;
     QComboBox *_gainBoxes[SCOPE_CHANNEL_COUNT];
     QDoubleSpinBox *_offsetBoxes[SCOPE_CHANNEL_COUNT];
     QString _rxBuffer;
