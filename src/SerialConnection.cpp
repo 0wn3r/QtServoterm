@@ -347,7 +347,11 @@ void SerialConnection::_HandleReceivedData(const QByteArray &data)
             emit configLineReceived(txt);
         }
         else
-            emit lineReceived(txt.replace("<=", "&lt;=")); // HACK, we really need to stop interpreting the data as HTML...
+        {
+            emit textReceived(txt);
+            QString html = txt;
+            emit lineReceived(html.replace("<=", "&lt;=")); // HACK, we really need to stop interpreting the data as HTML...
+        }
     }
 }
 
