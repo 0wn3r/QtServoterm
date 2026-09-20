@@ -24,6 +24,11 @@
 
 #include <QWidget>
 
+QT_BEGIN_NAMESPACE
+class QMouseEvent;
+class QPainter;
+QT_END_NAMESPACE
+
 namespace STMBL_Servoterm {
 
 class Oscilloscope : public QWidget
@@ -35,13 +40,26 @@ public slots:
     void addChannelsSample(const QVector<float> &channelsSample);
     void resetScanning();
     void setChannelEnabled(int channel, bool enabled);
+    void setChannelGain(int channel, double gain);
+    void setChannelOffset(int channel, double offset);
 protected:
     void paintEvent(QPaintEvent *event);
     void resizeEvent(QResizeEvent *event);
+    void mouseMoveEvent(QMouseEvent *event);
+    void leaveEvent(QEvent *event);
     void _SetScopeX(int newX);
+    // the y axis labels live in a left margin, so a sample index and a widget
+    // x differ by _PlotLeft() everywhere below
+    int _PlotLeft() const;
+    int _PlotWidth() const;
+    void _DrawGrid(QPainter &painter);
+    void _DrawCursor(QPainter &painter);
     QVector< QVector<float> > _channelsSamples;
     int _scopeX;
+    int _cursorSample;
     bool _channelEnabled[SCOPE_CHANNEL_COUNT];
+    double _channelGain[SCOPE_CHANNEL_COUNT];
+    double _channelOffset[SCOPE_CHANNEL_COUNT];
 };
 
 } // namespace STMBL_Servoterm
