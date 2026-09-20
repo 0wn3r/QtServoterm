@@ -74,6 +74,7 @@ MainWindow::MainWindow(QWidget *parent) :
     _portList(new ClickableComboBox),
     _oscilloscope(new Oscilloscope),
     _xyOscilloscope(new XYOscilloscope),
+    _xyPanel(new QWidget),
     _textLog(new QTextEdit),
     _lineEdit(new HistoryLineEdit),
     _sendButton(new QPushButton("Send")),
@@ -126,7 +127,7 @@ MainWindow::MainWindow(QWidget *parent) :
     if (!_actions->viewOscilloscope->isChecked())
         _oscilloscope->setVisible(_actions->viewOscilloscope->isChecked());
     if (!_actions->viewXYScope->isChecked())
-        _xyOscilloscope->setVisible(_actions->viewXYScope->isChecked());
+        _xyPanel->setVisible(_actions->viewXYScope->isChecked());
     if (!_actions->viewConsole->isChecked())
         _textLog->setVisible(_actions->viewConsole->isChecked());
 
@@ -217,6 +218,7 @@ MainWindow::MainWindow(QWidget *parent) :
                     if (!ok || gain == 0.0)
                         return;
                     _oscilloscope->setChannelGain(channel, gain);
+                    _xyOscilloscope->setChannelGain(channel, gain);
                     gainBox->setToolTip(tr("term0.gain%1: window +-%2, resolution %3")
                                             .arg(channel).arg(127.0/gain).arg(1.0/gain));
                     _serialConnection->sendData(QString("term0.gain%1 = %2\n").arg(channel).arg(gain, 0, 'g', 6).toLatin1());
@@ -238,6 +240,7 @@ MainWindow::MainWindow(QWidget *parent) :
                 // connected after setValue, for the same reason as the gain
                 connect(offsetBox, &QDoubleSpinBox::valueChanged, this, [this, channel, offsetBox] (double offset) {
                     _oscilloscope->setChannelOffset(channel, offset);
+                    _xyOscilloscope->setChannelOffset(channel, offset);
                     offsetBox->setToolTip(tr("term0.offset%1: the window centres on %2").arg(channel).arg(-offset));
                     _serialConnection->sendData(QString("term0.offset%1 = %2\n").arg(channel).arg(offset, 0, 'g', 6).toLatin1());
                 });
@@ -249,7 +252,33 @@ MainWindow::MainWindow(QWidget *parent) :
         {
             QHBoxLayout * const hbox = new QHBoxLayout;
             hbox->addWidget(_oscilloscope, 1);
-            hbox->addWidget(_xyOscilloscope);
+            {
+                // the locus says nothing unless you know which two signals
+                // drew it, so the pair lives with the plot rather than in the
+                // channel grid above
+                QVBoxLayout * const xyBox = new QVBoxLayout(_xyPanel);
+                xyBox->setContentsMargins(0, 0, 0, 0);
+                xyBox->addWidget(_xyOscilloscope, 1);
+                QHBoxLayout * const xyChannels = new QHBoxLayout;
+                QComboBox * const xBox = new QComboBox;
+                QComboBox * const yBox = new QComboBox;
+                for (int channel = 0; channel < SCOPE_CHANNEL_COUNT; channel++)
+                {
+                    xBox->addItem(QString::number(channel + 1));
+                    yBox->addItem(QString::number(channel + 1));
+                }
+                xBox->setCurrentIndex(0);
+                yBox->setCurrentIndex(1);
+                // connected after, so seeding the pair does not clear the plot
+                connect(xBox, &QComboBox::currentIndexChanged, _xyOscilloscope, &XYOscilloscope::setXChannel);
+                connect(yBox, &QComboBox::currentIndexChanged, _xyOscilloscope, &XYOscilloscope::setYChannel);
+                xyChannels->addWidget(new QLabel(tr("x")));
+                xyChannels->addWidget(xBox, 1);
+                xyChannels->addWidget(new QLabel(tr("y")));
+                xyChannels->addWidget(yBox, 1);
+                xyBox->addLayout(xyChannels);
+            }
+            hbox->addWidget(_xyPanel);
             vbox->addLayout(hbox);
         }
         vbox->addWidget(_textLog);
@@ -264,7 +293,7 @@ MainWindow::MainWindow(QWidget *parent) :
 
     connect(_actions->fileQuit, &QAction::triggered, qApp, &QCoreApplication::quit, Qt::QueuedConnection);
     connect(_actions->viewOscilloscope, &QAction::toggled, _oscilloscope, &QWidget::setVisible);
-    connect(_actions->viewXYScope, &QAction::toggled, _xyOscilloscope, &QWidget::setVisible);
+    connect(_actions->viewXYScope, &QAction::toggled, _xyPanel, &QWidget::setVisible);
     connect(_actions->viewConsole, &QAction::toggled, _textLog, &QWidget::setVisible);
     connect(_menuBar->portMenu, &QMenu::aboutToShow, this, &MainWindow::slot_PortListClicked);
     connect(_menuBar->portGroup, &QActionGroup::triggered, this, &MainWindow::slot_PortMenuItemSelected);
