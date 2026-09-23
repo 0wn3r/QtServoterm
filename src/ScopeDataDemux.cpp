@@ -28,6 +28,12 @@ ScopeDataDemux::ScopeDataDemux(QObject *parent) : QObject(parent), _state(SCOPED
 {
 }
 
+void ScopeDataDemux::reset()
+{
+    _state = SCOPEDATADEMUX_STATE_IDLE;
+    _packet.resize(0);
+}
+
 QString ScopeDataDemux::addData(const QByteArray &data)
 {
     QString txt;

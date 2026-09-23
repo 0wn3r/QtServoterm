@@ -8,11 +8,19 @@
 #include <QMessageBox>
 #include <QMetaEnum>
 #include <QRegularExpression>
+#include <QFileInfo>
 
 namespace STMBL_Servoterm {
 
 static const quint16 STMBL_USB_VENDOR_ID  = 0x0483; //  1155
 static const quint16 STMBL_USB_PRODUCT_ID = 0x5740; // 22336
+
+// The drive counts itself connected as soon as USB is configured, not when a
+// program opens the port, so it queues up to its 2 KB transmit ring while no
+// one listens. On the bench the first bytes after an open were the tail of an
+// old scope packet, an old reply missing its start, then ~90 ms of old scope
+// samples. The ring drains in a few ms; this leaves margin for a slow host.
+static const int STALE_BACKLOG_MS = 150;
 
 SerialConnection::SerialConnection(QObject *parent) :
     QObject(parent),
@@ -21,7 +29,9 @@ SerialConnection::SerialConnection(QObject *parent) :
     _demux(new ScopeDataDemux(this)),
     _redirectingTimer(new QTimer(this)),
     _serialSendTimer(new QTimer(this)),
-    _redirectingToConfigEdit(false)
+    _redirectingToConfigEdit(false),
+    _discarding(false),
+    _connectionId(0)
 {
     // NOTE: this same interval also has to cover the delay before the
     // *first* byte of a "showconf" response arrives, which can be
@@ -77,8 +87,14 @@ QStringList SerialConnection::getSerialPortNames()
     return portNames;
 }
 
+// NOTE: despite the name, true means "not a serial port" (callers negate it)
 bool SerialConnection::isValidSerialPortName(const QString &portName)
 {
+    // QSerialPortInfo only knows the names it enumerates, so a stable path
+    // such as /dev/serial/by-id/usb-STMicroelectronics_STMBL_... came back
+    // null and was then parsed as an IP address
+    if (portName.startsWith('/') && QFileInfo::exists(portName))
+        return false;
     return QSerialPortInfo(portName).isNull();
 }
 
@@ -135,10 +151,26 @@ void SerialConnection::connectTo(const QString &portName)
         _serialPort->setBaudRate(115200);
         if (!_serialPort->open(QIODevice::ReadWrite))
         {
-            QMessageBox::critical(nullptr, "Error opening serial port", "Unable to open port \"" + portName + "\"");
+            // errorString tells "busy" (another program has it) from
+            // "permission denied" (not in dialout) and the like
+            QMessageBox::critical(nullptr, "Error opening serial port", "Unable to open port \"" + portName + "\": " + _serialPort->errorString());
             return;
         }
-        emit connected();
+        // throw away what the drive queued before this open, then start the
+        // demux and the caller's line parsing from a clean state
+        const quint32 id = ++_connectionId;
+        _discarding = true;
+        _redirectingToConfigEdit = false;
+        _serialPort->clear();
+        QTimer::singleShot(STALE_BACKLOG_MS, this, [this, id]()
+        {
+            if (id != _connectionId || !_serialPort->isOpen())
+                return;
+            _serialPort->readAll();
+            _demux->reset();
+            _discarding = false;
+            emit connected();
+        });
     }
     else // must be IP (or maybe even hostname?)
     {
@@ -294,7 +326,10 @@ void SerialConnection::slot_SerialErrorOccurred(QSerialPort::SerialPortError err
 
 void SerialConnection::slot_SerialDataReceived()
 {
-    _HandleReceivedData(_serialPort->readAll());
+    const QByteArray data = _serialPort->readAll();
+    if (_discarding)
+        return;
+    _HandleReceivedData(data);
 }
 
 /*void SerialConnection::slot_SerialPortClosed()
@@ -305,6 +340,8 @@ void SerialConnection::slot_SocketStateChanged(QAbstractSocket::SocketState sock
 {
     if (socketState == QAbstractSocket::ConnectedState)
     {
+        _demux->reset();
+        _redirectingToConfigEdit = false;
         emit connected();
     }
     else if (socketState == QAbstractSocket::UnconnectedState)
@@ -326,6 +363,8 @@ void SerialConnection::slot_SocketDataReceived()
 
 void SerialConnection::_Disconnect()
 {
+    ++_connectionId;
+    _discarding = false;
     if (_serialPort->isOpen())
     {
         _serialPort->close();

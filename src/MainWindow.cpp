@@ -536,6 +536,8 @@ void MainWindow::slot_SendClicked()
 
 void MainWindow::slot_SerialConnected()
 {
+    // a line cut off by the last disconnect must not prefix the first reply
+    _rxBuffer.clear();
     slot_RefreshScopeConfig();
     AppendTextToEdit(*_textLog, &QTextEdit::insertHtml, "<font color=\"FireBrick\">connected</font>");
     AppendTextToEdit(*_textLog, &QTextEdit::insertPlainText, "\n");

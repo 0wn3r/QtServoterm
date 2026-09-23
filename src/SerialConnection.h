@@ -84,6 +84,11 @@ protected:
     QTimer *_serialSendTimer;
     QStringList _txQueue;
     bool _redirectingToConfigEdit;
+    // set from open until the drive's stale backlog has been thrown away
+    bool _discarding;
+    // bumped on every open and close, so a settle timer from an earlier
+    // connection cannot announce this one
+    quint32 _connectionId;
 };
 
 } // namespace STMBL_Servoterm

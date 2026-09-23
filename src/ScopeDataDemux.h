@@ -35,6 +35,8 @@ class ScopeDataDemux : public QObject
 public:
     ScopeDataDemux(QObject *parent = nullptr);
     QString addData(const QByteArray &data);
+    // forget any half-read packet, for a fresh connection
+    void reset();
 signals:
     void scopePacketReceived(const QVector<float> &packet);
     void scopeResetReceived();
