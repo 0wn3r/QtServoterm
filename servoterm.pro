@@ -9,6 +9,7 @@ src/ClickableComboBox.h \
 src/ConfigDialog.h \
 src/Oscilloscope.h \
 src/XYOscilloscope.h \
+src/PlaybackWindow.h \
 src/HistoryLineEdit.h \
 src/SerialConnection.h \
 src/ScopeDataDemux.h \
@@ -21,6 +22,7 @@ src/ClickableComboBox.cpp \
 src/ConfigDialog.cpp \
 src/Oscilloscope.cpp \
 src/XYOscilloscope.cpp \
+src/PlaybackWindow.cpp \
 src/HistoryLineEdit.cpp \
 src/SerialConnection.cpp \
 src/ScopeDataDemux.cpp \

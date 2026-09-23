@@ -42,6 +42,7 @@ public:
     QAction *dataRecord;
     QAction *dataSetDirectory;
     QAction *dataOpenDirectory;
+    QAction *dataPlayback;
     QAction *viewOscilloscope;
     QAction *viewXYScope;
     QAction *viewScopePause;

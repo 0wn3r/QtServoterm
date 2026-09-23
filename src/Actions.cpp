@@ -33,6 +33,7 @@ Actions::Actions(QObject *parent) : QObject(parent)
     dataRecord = new QAction("Record", this);
     dataSetDirectory = new QAction("Set Directory...", this);
     dataOpenDirectory = new QAction("Open Directory (in File Manager)", this);
+    dataPlayback = new QAction("Play Back Recording...", this);
     viewOscilloscope = new QAction("Show Oscilloscope", this);
     viewXYScope = new QAction("Show X/Y Scope", this);
     viewScopePause = new QAction("Pause Scope", this);

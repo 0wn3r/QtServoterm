@@ -18,6 +18,7 @@ add_executable(${PROJECT_NAME}
     src/ConfigDialog.cpp
     src/Oscilloscope.cpp
     src/XYOscilloscope.cpp
+    src/PlaybackWindow.cpp
     src/HistoryLineEdit.cpp
     src/SerialConnection.cpp
     src/ScopeDataDemux.cpp

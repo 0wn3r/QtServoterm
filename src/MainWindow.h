@@ -67,6 +67,7 @@ protected slots:
     void slot_DataRecordToggled(bool recording);
     void slot_DataSetDirectoryClicked();
     void slot_DataOpenDirectoryClicked();
+    void slot_DataPlaybackClicked();
     void slot_SendClicked();
     void slot_SerialConnected();
     void slot_SerialDisconnected();

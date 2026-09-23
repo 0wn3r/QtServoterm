@@ -27,7 +27,7 @@
 
 namespace STMBL_Servoterm {
 
-Oscilloscope::Oscilloscope(QWidget *parent) : QWidget(parent), _scopeX(0), _cursorSample(-1), _referenceChannel(-1), _plotLeft(0)
+Oscilloscope::Oscilloscope(QWidget *parent) : QWidget(parent), _scopeX(0), _cursorSample(-1), _referenceChannel(-1), _plotLeft(0), _lastPlotWidth(-1), _fixedWindow(false)
 {
     setMinimumSize(600, 256);
     QPalette pal = palette();
@@ -72,8 +72,38 @@ void Oscilloscope::_ReflowPlot()
     if (_scopeX >= w)
         _scopeX = 0;
     if (_cursorSample >= _channelsSamples.size())
-        _cursorSample = -1;
+        _SetCursorSample(-1);
     update();
+    if (w != _lastPlotWidth)
+    {
+        _lastPlotWidth = w;
+        emit plotWidthChanged(w);
+    }
+}
+
+int Oscilloscope::plotWidth() const
+{
+    return _PlotWidth();
+}
+
+void Oscilloscope::setSamples(const QVector< QVector<float> > &samples)
+{
+    _fixedWindow = true;
+    _channelsSamples = samples;
+    if (_channelsSamples.size() > _PlotWidth())
+        _channelsSamples.resize(_PlotWidth());
+    _scopeX = 0;
+    if (_cursorSample >= _channelsSamples.size())
+        _SetCursorSample(-1);
+    update();
+}
+
+void Oscilloscope::_SetCursorSample(int sample)
+{
+    if (sample == _cursorSample)
+        return;
+    _cursorSample = sample;
+    emit cursorSampleChanged(sample);
 }
 
 int Oscilloscope::_PlotLeft() const
@@ -129,6 +159,14 @@ void Oscilloscope::addChannelsSample(const QVector<float> &channelsSample)
 {
     if (channelsSample.size() != SCOPE_CHANNEL_COUNT) // sanity check
         return;
+    if (_fixedWindow)
+    {
+        // leaving playback style display: start a fresh scan
+        _fixedWindow = false;
+        _channelsSamples.clear();
+        _scopeX = 0;
+        update();
+    }
 
     // add/overwrite the appropriate sample
     const int h = height();
@@ -291,7 +329,7 @@ void Oscilloscope::mouseMoveEvent(QMouseEvent *event)
     const int newSample = (sample >= 0 && sample < _channelsSamples.size()) ? sample : -1;
     if (newSample != _cursorSample)
     {
-        _cursorSample = newSample;
+        _SetCursorSample(newSample);
         update();
     }
     QWidget::mouseMoveEvent(event);
@@ -301,7 +339,7 @@ void Oscilloscope::leaveEvent(QEvent *event)
 {
     if (_cursorSample != -1)
     {
-        _cursorSample = -1;
+        _SetCursorSample(-1);
         update();
     }
     QWidget::leaveEvent(event);
@@ -331,8 +369,11 @@ void Oscilloscope::paintEvent(QPaintEvent *event)
             DrawSampleRange(_channelsSamples, middleX,   lastX, plotLeft, h, painter, _channelEnabled);
         }
     }
-    painter.setPen(Qt::blue);
-    painter.drawLine(plotLeft + _scopeX, 0, plotLeft + _scopeX, h-1);
+    if (!_fixedWindow)
+    {
+        painter.setPen(Qt::blue);
+        painter.drawLine(plotLeft + _scopeX, 0, plotLeft + _scopeX, h-1);
+    }
     _DrawCursor(painter);
 }
 
@@ -347,7 +388,14 @@ void Oscilloscope::resizeEvent(QResizeEvent *event)
     // make sure we're still inside the window
     if (_scopeX >= _channelsSamples.size())
         _SetScopeX(0);
+    if (_cursorSample >= _channelsSamples.size())
+        _SetCursorSample(-1);
     QWidget::resizeEvent(event);
+    if (w != _lastPlotWidth)
+    {
+        _lastPlotWidth = w;
+        emit plotWidthChanged(w);
+    }
 }
 
 void Oscilloscope::_SetScopeX(int newX)

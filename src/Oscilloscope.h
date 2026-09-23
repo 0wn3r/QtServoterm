@@ -36,7 +36,13 @@ class Oscilloscope : public QWidget
     Q_OBJECT
 public:
     Oscilloscope(QWidget *parent = nullptr);
+    // samples that fit across the plot at one sample per pixel
+    int plotWidth() const;
 public slots:
+    // show a fixed window of samples instead of a scanning ring, for
+    // playback: the first sample sits at the left edge and there is no
+    // scan line. addChannelsSample() goes back to scanning.
+    void setSamples(const QVector< QVector<float> > &samples);
     void addChannelsSample(const QVector<float> &channelsSample);
     void resetScanning();
     void setChannelEnabled(int channel, bool enabled);
@@ -45,6 +51,10 @@ public slots:
     // -1 labels the axis in normalised units, otherwise it follows this
     // channel's gain and offset into engineering units
     void setReferenceChannel(int channel);
+signals:
+    void plotWidthChanged(int width);
+    // index into the shown samples, -1 when the pointer is off the trace
+    void cursorSampleChanged(int sample);
 protected:
     void paintEvent(QPaintEvent *event);
     void resizeEvent(QResizeEvent *event);
@@ -63,11 +73,14 @@ protected:
     void _ReflowPlot();
     void _DrawGrid(QPainter &painter);
     void _DrawCursor(QPainter &painter);
+    void _SetCursorSample(int sample);
     QVector< QVector<float> > _channelsSamples;
     int _scopeX;
     int _cursorSample;
     int _referenceChannel;
     int _plotLeft;
+    int _lastPlotWidth;
+    bool _fixedWindow;
     bool _channelEnabled[SCOPE_CHANNEL_COUNT];
     double _channelGain[SCOPE_CHANNEL_COUNT];
     double _channelOffset[SCOPE_CHANNEL_COUNT];

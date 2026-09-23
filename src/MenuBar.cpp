@@ -45,6 +45,7 @@ MenuBar::MenuBar(Actions *actions, QWidget *parent) : QMenuBar(parent)
     
     QMenu * const dataMenu = addMenu("Data");
     dataMenu->addAction(actions->dataRecord);
+    dataMenu->addAction(actions->dataPlayback);
     dataMenu->addSeparator();
     dataMenu->addAction(actions->dataSetDirectory);
     dataMenu->addAction(actions->dataOpenDirectory);

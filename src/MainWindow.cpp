@@ -59,6 +59,7 @@
 #include "XYOscilloscope.h"
 #include "HistoryLineEdit.h"
 #include "SerialConnection.h"
+#include "PlaybackWindow.h"
 
 #include <limits>
 
@@ -371,6 +372,7 @@ MainWindow::MainWindow(QWidget *parent) :
     connect(_actions->dataRecord, &QAction::toggled, this, &MainWindow::slot_DataRecordToggled);
     connect(_actions->dataSetDirectory, &QAction::triggered, this, &MainWindow::slot_DataSetDirectoryClicked);
     connect(_actions->dataOpenDirectory, &QAction::triggered, this, &MainWindow::slot_DataOpenDirectoryClicked);
+    connect(_actions->dataPlayback, &QAction::triggered, this, &MainWindow::slot_DataPlaybackClicked);
     connect(_lineEdit, &HistoryLineEdit::textChanged, this, &MainWindow::slot_UpdateButtons);
     connect(_lineEdit, &HistoryLineEdit::returnPressed, _sendButton, &QAbstractButton::click);
     connect(_sendButton, &QPushButton::clicked, this, &MainWindow::slot_SendClicked);
@@ -519,6 +521,25 @@ void MainWindow::slot_DataSetDirectoryClicked()
 void MainWindow::slot_DataOpenDirectoryClicked()
 {
     QDesktopServices::openUrl(QUrl::fromLocalFile(_recordingsDirectory.isEmpty() ? QDir::currentPath() : _recordingsDirectory)); // TODO consolidate this
+}
+
+void MainWindow::slot_DataPlaybackClicked()
+{
+    const QString dirPath = _recordingsDirectory.isEmpty() ? QDir::currentPath() : _recordingsDirectory; // TODO consolidate this
+    const QString filePath = QFileDialog::getOpenFileName(this, tr("Play Back Recording"), dirPath, tr("Recordings (*.csv);;All files (*)"));
+    if (filePath.isEmpty())
+        return;
+    ScopeRecording recording;
+    QString error;
+    if (!recording.load(filePath, &error))
+    {
+        QMessageBox::critical(this, "Error opening recording", "Couldn't read \"" + filePath + "\": " + error);
+        return;
+    }
+    // its own window, so a recording can be walked through while the live
+    // scope keeps running; several can be open side by side
+    PlaybackWindow * const window = new PlaybackWindow(recording, this);
+    window->show();
 }
 
 void MainWindow::slot_SendClicked()
