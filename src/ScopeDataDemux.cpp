@@ -33,7 +33,17 @@ QString ScopeDataDemux::addData(const QByteArray &data)
     QString txt;
     for (QByteArray::const_iterator it = data.begin(); it != data.end(); ++it)
     {
-        if(_state == SCOPEDATADEMUX_STATE_READING_PACKET)
+        // term.c clamps every payload byte to 1..254 and the text is ASCII, so
+        // 0xFF only ever starts a packet: seeing one mid-packet means a byte
+        // went missing, and restarting here costs one packet instead of
+        // spilling the rest of this one into the text. 0xFE is not a marker
+        // mid-packet -- 254 is what a channel clipped at the top reads.
+        if(*it == static_cast<char>(0xFF))
+        {
+            _state = SCOPEDATADEMUX_STATE_READING_PACKET;
+            _packet.resize(0);
+        }
+        else if(_state == SCOPEDATADEMUX_STATE_READING_PACKET)
         {
             _packet.append((static_cast<int>(static_cast<quint8>(*it)) - 128) / 128.0);
             if(_packet.size() == SCOPE_CHANNEL_COUNT)
@@ -47,19 +57,16 @@ QString ScopeDataDemux::addData(const QByteArray &data)
                 emit scopePacketReceived(packet);
             }
         }
-        else if (*it == static_cast<char>(0xFF))
-        {
-            _state = SCOPEDATADEMUX_STATE_READING_PACKET;
-            _packet.resize(0);
-        }
         else if (*it == static_cast<char>(0xFE))
         {
             emit scopeResetReceived();
         }
-        else
+        else if (static_cast<quint8>(*it) < 0x80)
         {
             txt.append(QChar::fromLatin1(*it));
         }
+        // anything else is a packet whose 0xFF was lost, and would only
+        // show up in the log as mojibake
     }
     return txt;
 }

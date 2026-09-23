@@ -611,7 +611,10 @@ void MainWindow::slot_ParseText(const QString &text)
         const QString line = _rxBuffer.left(newline);
         _rxBuffer.remove(0, newline + 1);
 
-        static const QRegularExpression stepRe(QStringLiteral("^\\s*term0\\.send_step\\b.*=\\s*([-0-9.eE+]+)"));
+        // not anchored to the start of the line: on rare occasions the drive
+        // loses a packet's 0xFF and its payload lands in front of a reply, and
+        // a reply ignored for that leaves a channel showing stale settings
+        static const QRegularExpression stepRe(QStringLiteral("term0\\.send_step\\b.*=\\s*([-0-9.eE+]+)"));
         const QRegularExpressionMatch stepMatch = stepRe.match(line);
         if (stepMatch.hasMatch())
         {
@@ -622,7 +625,7 @@ void MainWindow::slot_ParseText(const QString &text)
             continue;
         }
 
-        static const QRegularExpression pinRe(QStringLiteral("^\\s*term0\\.(wave|gain|offset)(\\d)\\b(.*)$"));
+        static const QRegularExpression pinRe(QStringLiteral("term0\\.(wave|gain|offset)(\\d)\\b(.*)$"));
         const QRegularExpressionMatch match = pinRe.match(line);
         if (!match.hasMatch())
             continue;
