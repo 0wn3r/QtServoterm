@@ -36,6 +36,8 @@ Actions::Actions(QObject *parent) : QObject(parent)
     viewOscilloscope = new QAction("Show Oscilloscope", this);
     viewXYScope = new QAction("Show X/Y Scope", this);
     viewScopePause = new QAction("Pause Scope", this);
+    viewScopeArmCapture = new QAction("Arm Capture", this);
+    viewScopeResumeLive = new QAction("Resume Live", this);
     viewConsole = new QAction("Show Console Output", this); // TODO change this to "Show Console"
     viewClearConsole = new QAction("Clear", this); // TODO change this to "Clear Console"?
     viewThemeSystem = new QAction("System", this);

@@ -22,10 +22,7 @@
 
 #include <QObject>
 #include <QVector>
-
-QT_BEGIN_NAMESPACE
-class QByteArray;
-QT_END_NAMESPACE
+#include <QByteArray>
 
 namespace STMBL_Servoterm {
 
@@ -35,16 +32,50 @@ class ScopeDataDemux : public QObject
 public:
     ScopeDataDemux(QObject *parent = nullptr);
     QString addData(const QByteArray &data);
+    // forget any half received frame or capture, for a fresh connection
+    void reset();
 signals:
     void scopePacketReceived(const QVector<float> &packet);
     void scopeResetReceived();
+    // the drive's seq jumped, so this many live samples never arrived. it is
+    // emitted before the NaN packets that stand in for (up to 64 of) them.
+    void scopeSamplesLost(int count);
+    // kind 0 is the live stream, kind 1 announces a capture upload
+    void scopeHeaderReceived(int kind, double period, int count, int pre);
+    // which wire format the live samples are arriving in, on a change
+    void scopeFormatChanged(bool isFloat);
+    // one QVector<float> of SCOPE_CHANNEL_COUNT values per capture sample,
+    // NaN where an index never arrived. sample pre is the trigger.
+    void captureReceived(const QVector< QVector<float> > &samples, double period, int pre);
 protected:
+    void _StartByte(char byte, QString &txt);
+    void _HandleFrame();
+    void _HandleFloatSample(const unsigned char *payload);
+    void _HandleHeader(const unsigned char *payload);
+    void _HandleCaptureSample(const unsigned char *payload);
+    void _FinishCapture();
+    void _SetFormat(int format);
     enum State
     {
         SCOPEDATADEMUX_STATE_IDLE = 0,
-        SCOPEDATADEMUX_STATE_READING_PACKET
+        // the legacy 0xFF packet, whose payload may legitimately hold 0xFE
+        SCOPEDATADEMUX_STATE_READING_PACKET,
+        // a 0xFD/0xFC/0xFB frame, whose payload never holds a marker
+        SCOPEDATADEMUX_STATE_READING_FRAME
     } _state;
     QVector<float> _packet;
+    quint8 _frameMarker;
+    int _frameLength;
+    bool _frameBad;
+    QByteArray _frame;
+    // seq of the last float sample, or -1 when the next one starts afresh
+    int _lastSeq;
+    // 0 unknown, 1 legacy bytes, 2 float
+    int _format;
+    bool _capturing;
+    QVector< QVector<float> > _capture;
+    double _capturePeriod;
+    int _capturePre;
 };
 
 } // namespace STMBL_Servoterm

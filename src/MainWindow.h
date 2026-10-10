@@ -76,6 +76,12 @@ protected slots:
     void slot_LogError(const QString &errorMessage);
     void slot_ScopePacketReceived(const QVector<float> &packet);
     void slot_ScopeResetReceived();
+    void slot_ScopeSamplesLost(int count);
+    void slot_ScopeHeaderReceived(int kind, double period, int count, int pre);
+    void slot_ScopeFormatChanged(bool isFloat);
+    void slot_CaptureReceived(const QVector< QVector<float> > &samples, double period, int pre);
+    void slot_ArmCapture();
+    void slot_ResumeLive();
     void slot_UpdateButtons();
     void slot_SendJogCommand();
     void slot_ThemeSelected(QAction *act);
@@ -89,6 +95,9 @@ protected:
     void _RepopulateDeviceList();
     void _WriteCsvHeader();
     void _NoteCsvScalingChange(int channel, const QString &what, double from, double to);
+    QString _CsvRow(qint64 index, const QVector<float> &packet) const;
+    QString _ScopePeriodText() const;
+    void _UpdateScopeStatus();
     void _saveSettings();
     void _loadSettings();
     void _ApplyTheme(int theme);
@@ -137,6 +146,13 @@ protected:
         JOGGING_CCW
     } _jogState;
     QString _recordingsDirectory;
+    // what the drive's live header and samples have said about the stream:
+    // period in seconds (0 until a header arrives), format -1 unknown, 0 the
+    // legacy bytes, 1 float, and the running count of samples it lost
+    double _scopePeriod;
+    int _scopeFormat;
+    qint64 _scopeLost;
+    QLabel *_scopeStatusLabel;
 };
 
 } // namespace STMBL_Servoterm

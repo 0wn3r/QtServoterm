@@ -25,9 +25,11 @@
 #include <QPainter>
 #include <QStringList>
 
+#include <cmath>
+
 namespace STMBL_Servoterm {
 
-Oscilloscope::Oscilloscope(QWidget *parent) : QWidget(parent), _scopeX(0), _cursorSample(-1), _referenceChannel(-1), _plotLeft(0)
+Oscilloscope::Oscilloscope(QWidget *parent) : QWidget(parent), _scopeX(0), _cursorSample(-1), _referenceChannel(-1), _plotLeft(0), _capturePre(0), _captureMarkerX(-1), _showingCapture(false)
 {
     setMinimumSize(600, 256);
     QPalette pal = palette();
@@ -66,6 +68,8 @@ void Oscilloscope::_ReflowPlot()
     // a wider margin means a narrower plot, so the ring has to be trimmed to
     // match or samples would sit past the right hand edge
     _RecalcPlotLeft();
+    if (_showingCapture)
+        _LayoutCapture();
     const int w = _PlotWidth();
     if (_channelsSamples.size() > w)
         _channelsSamples.resize(w);
@@ -129,6 +133,8 @@ void Oscilloscope::addChannelsSample(const QVector<float> &channelsSample)
 {
     if (channelsSample.size() != SCOPE_CHANNEL_COUNT) // sanity check
         return;
+    if (_showingCapture) // frozen on a capture until resumeLive()
+        return;
 
     // add/overwrite the appropriate sample
     const int h = height();
@@ -162,6 +168,61 @@ void Oscilloscope::resetScanning()
     _SetScopeX(0);
 }
 
+bool Oscilloscope::isShowingCapture() const
+{
+    return _showingCapture;
+}
+
+void Oscilloscope::showCapture(const QVector< QVector<float> > &samples, int pre)
+{
+    _capture = samples;
+    _capturePre = pre;
+    _showingCapture = true;
+    _LayoutCapture();
+    update();
+}
+
+void Oscilloscope::resumeLive()
+{
+    if (!_showingCapture)
+        return;
+    _showingCapture = false;
+    _capture.clear();
+    _captureMarkerX = -1;
+    // the capture's pixels mean nothing on the live time base, so start clean
+    _channelsSamples.clear();
+    _cursorSample = -1;
+    _scopeX = 0;
+    update();
+}
+
+void Oscilloscope::_LayoutCapture()
+{
+    // one capture sample per pixel when it fits, otherwise plain decimation.
+    // a capture is short next to the screen (1024 samples on the F4), so
+    // losing the odd sample in between is an acceptable price for simplicity.
+    const int n = _capture.size();
+    const int w = _PlotWidth();
+    const int shown = qMin(n, w);
+    _channelsSamples.resize(shown);
+    for (int x = 0; x < shown; x++)
+        _channelsSamples[x] = _capture.at(static_cast<int>(static_cast<qint64>(x)*n/shown));
+    _captureMarkerX = (n > 0 && _capturePre >= 0 && _capturePre < n)
+                    ? static_cast<int>(static_cast<qint64>(_capturePre)*shown/n) : -1;
+    // the scan line has no meaning on a still picture, so park it out of the way
+    _scopeX = shown;
+    if (_cursorSample >= _channelsSamples.size())
+        _cursorSample = -1;
+}
+
+static void DrawPolyline(const QPolygon &points, QPainter &painter)
+{
+    if (points.size() == 1)
+        painter.drawPoint(points.at(0));
+    else if (points.size() > 1)
+        painter.drawPolyline(points);
+}
+
 static void DrawSampleRange(const QVector< QVector<float> > &channelsSamples, int start, int end, int plotLeft, int h, QPainter &painter, const bool *channelEnabled)
 {
     const int numSamples = end - start;
@@ -176,11 +237,22 @@ static void DrawSampleRange(const QVector< QVector<float> > &channelsSamples, in
             continue;
         points.resize(0);
         clipped.resize(0);
+        painter.setPen(SCOPE_CHANNEL_COLORS[channel]);
         for (int sample = start; sample < end; sample++)
         {
             const float v = channelsSamples[sample].at(channel);
+            // NaN stands in for samples the drive lost, so the line breaks
+            // there rather than bridging the hole with a made up slope
+            if (std::isnan(v))
+            {
+                DrawPolyline(points, painter);
+                points.resize(0);
+                continue;
+            }
             const int x = plotLeft + sample;
-            const int y = qBound(0, static_cast<int>(h/2 - static_cast<float>(h/2)*v), h-1);
+            // float samples are never clipped by the drive, so bound the value
+            // before it meets an int
+            const int y = qBound(0, static_cast<int>(h/2 - static_cast<float>(h/2)*qBound(-2.0f, v, 2.0f)), h-1);
             points.append(QPoint(x, y));
             // a channel whose gain is too high pins against the firmware's
             // byte clamp and draws as a perfectly convincing flat line. mark
@@ -188,11 +260,7 @@ static void DrawSampleRange(const QVector< QVector<float> > &channelsSamples, in
             if (v <= SCOPE_CLAMP_LOW || v >= SCOPE_CLAMP_HIGH)
                 clipped.append(QPoint(x, y));
         }
-        painter.setPen(SCOPE_CHANNEL_COLORS[channel]);
-        if (points.size() == 1)
-            painter.drawPoint(points.at(0));
-        else
-            painter.drawPolyline(points);
+        DrawPolyline(points, painter);
         if (!clipped.isEmpty())
         {
             QPen pen(SCOPE_CHANNEL_COLORS[channel]);
@@ -249,6 +317,13 @@ void Oscilloscope::_DrawCursor(QPainter &painter)
         if (!_channelEnabled[channel] || channel >= sample.size())
             continue;
         const float v = sample.at(channel);
+        if (std::isnan(v))
+        {
+            // a sample the drive lost: there is no value to show
+            labels.append(QString("%1: -").arg(channel + 1));
+            shown.append(channel);
+            continue;
+        }
         const double gain = (_channelGain[channel] != 0.0) ? _channelGain[channel] : 1.0;
         // inverse of term.c: value = (byte - 128)/gain - offset, and the demux
         // already divided the byte by 128
@@ -331,8 +406,24 @@ void Oscilloscope::paintEvent(QPaintEvent *event)
             DrawSampleRange(_channelsSamples, middleX,   lastX, plotLeft, h, painter, _channelEnabled);
         }
     }
-    painter.setPen(Qt::blue);
-    painter.drawLine(plotLeft + _scopeX, 0, plotLeft + _scopeX, h-1);
+    if (_showingCapture)
+    {
+        // the trigger, where sample pre of the capture landed
+        if (_captureMarkerX >= 0)
+        {
+            QPen pen(Qt::magenta);
+            pen.setStyle(Qt::DashLine);
+            painter.setPen(pen);
+            painter.drawLine(plotLeft + _captureMarkerX, 0, plotLeft + _captureMarkerX, h-1);
+        }
+        painter.setPen(Qt::magenta);
+        painter.drawText(plotLeft + 4, fontMetrics().ascent() + 2, tr("capture (%1 samples)").arg(_capture.size()));
+    }
+    else
+    {
+        painter.setPen(Qt::blue);
+        painter.drawLine(plotLeft + _scopeX, 0, plotLeft + _scopeX, h-1);
+    }
     _DrawCursor(painter);
 }
 
@@ -341,6 +432,9 @@ void Oscilloscope::resizeEvent(QResizeEvent *event)
     _RecalcPlotLeft(); // the font can change out from under us with the style
     const int w = qMax(1, event->size().width() - _PlotLeft());
 
+    // a capture is laid out to fit, so lay it out again for the new width
+    if (_showingCapture)
+        _LayoutCapture();
     // possibly reduce the data window length
     if (_channelsSamples.size() > w)
         _channelsSamples.resize(w);

@@ -61,6 +61,10 @@ signals:
     void configLineReceived(const QString &line);
     void scopePacketReceived(const QVector<float> &packet);
     void scopeResetReceived();
+    void scopeSamplesLost(int count);
+    void scopeHeaderReceived(int kind, double period, int count, int pre);
+    void scopeFormatChanged(bool isFloat);
+    void captureReceived(const QVector< QVector<float> > &samples, double period, int pre);
     void connected();
     void disconnected();
     void errorMessage(const QString &errorMessage);

@@ -36,6 +36,7 @@ class Oscilloscope : public QWidget
     Q_OBJECT
 public:
     Oscilloscope(QWidget *parent = nullptr);
+    bool isShowingCapture() const;
 public slots:
     void addChannelsSample(const QVector<float> &channelsSample);
     void resetScanning();
@@ -45,6 +46,11 @@ public slots:
     // -1 labels the axis in normalised units, otherwise it follows this
     // channel's gain and offset into engineering units
     void setReferenceChannel(int channel);
+    // freezes the plot on a drive capture, squeezed to the plot width, with a
+    // marker on sample pre (the trigger). live samples are ignored until
+    // resumeLive().
+    void showCapture(const QVector< QVector<float> > &samples, int pre);
+    void resumeLive();
 protected:
     void paintEvent(QPaintEvent *event);
     void resizeEvent(QResizeEvent *event);
@@ -63,11 +69,17 @@ protected:
     void _ReflowPlot();
     void _DrawGrid(QPainter &painter);
     void _DrawCursor(QPainter &painter);
+    void _LayoutCapture();
     QVector< QVector<float> > _channelsSamples;
     int _scopeX;
     int _cursorSample;
     int _referenceChannel;
     int _plotLeft;
+    // the capture as it arrived, kept so a resize can lay it out again
+    QVector< QVector<float> > _capture;
+    int _capturePre;
+    int _captureMarkerX;
+    bool _showingCapture;
     bool _channelEnabled[SCOPE_CHANNEL_COUNT];
     double _channelGain[SCOPE_CHANNEL_COUNT];
     double _channelOffset[SCOPE_CHANNEL_COUNT];

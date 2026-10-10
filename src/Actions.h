@@ -45,6 +45,8 @@ public:
     QAction *viewOscilloscope;
     QAction *viewXYScope;
     QAction *viewScopePause;
+    QAction *viewScopeArmCapture;
+    QAction *viewScopeResumeLive;
     QAction *viewConsole;
     QAction *viewClearConsole;
     QAction *viewThemeSystem;

@@ -12,6 +12,7 @@ src/XYOscilloscope.h \
 src/HistoryLineEdit.h \
 src/SerialConnection.h \
 src/ScopeDataDemux.h \
+src/D250.h \
 src/MainWindow.h
 
 SOURCES = \

@@ -93,6 +93,10 @@ MainWindow::MainWindow(QWidget *parent) :
     _rightPressed(false),
     _theme(THEME_SYSTEM)
 {
+    _scopePeriod = 0.0;
+    _scopeFormat = -1;
+    _scopeLost = 0;
+    _scopeStatusLabel = new QLabel;
     _jogTimer->setInterval(SEND_JOG_COMMAND_PERIOD_MS);
     _portList->setEditable(true);
     {
@@ -154,6 +158,8 @@ MainWindow::MainWindow(QWidget *parent) :
         toolbar->addAction(_actions->driveJogEnable);
         toolbar->addAction(_actions->viewXYScope);
         toolbar->addAction(_actions->viewScopePause);
+        toolbar->addAction(_actions->viewScopeArmCapture);
+        toolbar->addAction(_actions->viewScopeResumeLive);
         toolbar->addAction(_actions->driveEditConfig);
         addToolBar(toolbar);
     }
@@ -351,6 +357,10 @@ MainWindow::MainWindow(QWidget *parent) :
         outer->addWidget(_scopeConfigPanel);
         setCentralWidget(dummy);
     }
+    // the drive's own word on the sample rate and format, so it is plain
+    // whether "term0.fmt = 1" took and what the time axis is worth
+    statusBar()->addPermanentWidget(_scopeStatusLabel);
+    _UpdateScopeStatus();
 
     connect(_actions->fileQuit, &QAction::triggered, qApp, &QCoreApplication::quit, Qt::QueuedConnection);
     connect(_actions->viewOscilloscope, &QAction::toggled, _oscilloscope, &QWidget::setVisible);
@@ -385,6 +395,12 @@ MainWindow::MainWindow(QWidget *parent) :
     connect(_serialConnection, &SerialConnection::disconnected, this, &MainWindow::slot_UpdateButtons);
     connect(_serialConnection, &SerialConnection::scopePacketReceived, this, &MainWindow::slot_ScopePacketReceived);
     connect(_serialConnection, &SerialConnection::scopeResetReceived, this, &MainWindow::slot_ScopeResetReceived);
+    connect(_serialConnection, &SerialConnection::scopeSamplesLost, this, &MainWindow::slot_ScopeSamplesLost);
+    connect(_serialConnection, &SerialConnection::scopeHeaderReceived, this, &MainWindow::slot_ScopeHeaderReceived);
+    connect(_serialConnection, &SerialConnection::scopeFormatChanged, this, &MainWindow::slot_ScopeFormatChanged);
+    connect(_serialConnection, &SerialConnection::captureReceived, this, &MainWindow::slot_CaptureReceived);
+    connect(_actions->viewScopeArmCapture, &QAction::triggered, this, &MainWindow::slot_ArmCapture);
+    connect(_actions->viewScopeResumeLive, &QAction::triggered, this, &MainWindow::slot_ResumeLive);
     connect(_serialConnection, &SerialConnection::errorMessage, this, &MainWindow::slot_LogError);
     connect(_jogTimer, &QTimer::timeout, this, &MainWindow::slot_SendJogCommand);
     slot_UpdateButtons();
@@ -536,6 +552,14 @@ void MainWindow::slot_SendClicked()
 
 void MainWindow::slot_SerialConnected()
 {
+    _scopePeriod = 0.0;
+    _scopeFormat = -1;
+    _scopeLost = 0;
+    _UpdateScopeStatus();
+    // ask for the float format first, so the live header that answers it
+    // arrives with everything else. firmware without it says "not found:
+    // term0.fmt", which no parser below matches, and carries on with bytes.
+    _serialConnection->sendData("term0.fmt = 1\n");
     slot_RefreshScopeConfig();
     AppendTextToEdit(*_textLog, &QTextEdit::insertHtml, "<font color=\"FireBrick\">connected</font>");
     AppendTextToEdit(*_textLog, &QTextEdit::insertPlainText, "\n");
@@ -543,6 +567,9 @@ void MainWindow::slot_SerialConnected()
 
 void MainWindow::slot_SerialDisconnected()
 {
+    _scopePeriod = 0.0;
+    _scopeFormat = -1;
+    _UpdateScopeStatus();
     AppendTextToEdit(*_textLog, &QTextEdit::insertHtml, "<font color=\"FireBrick\">disconnected</font>");
     AppendTextToEdit(*_textLog, &QTextEdit::insertPlainText, "\n");
 }
@@ -563,7 +590,10 @@ void MainWindow::_WriteCsvHeader()
     // row index has to be read against
     header.append(_sendStep > 0.0 ? QString("# term0.send_step = %1").arg(_sendStep, 0, 'g', 6)
                                   : QStringLiteral("# term0.send_step unknown"));
+    header.append(_scopePeriod > 0.0 ? QString("# scope period = %1").arg(_ScopePeriodText())
+                                     : QStringLiteral("# scope period unknown (no header from the drive)"));
     header.append(QStringLiteral("# values are engineering units: normalised*128/gain - offset"));
+    header.append(QStringLiteral("# empty cells are samples the drive lost"));
     for (int channel = 0; channel < SCOPE_CHANNEL_COUNT; channel++)
     {
         header.append(QString("# ch%1 %2 gain %3 offset %4")
@@ -589,6 +619,51 @@ void MainWindow::_NoteCsvScalingChange(int channel, const QString &what, double 
     _csvFile->write(QString("# at sample %1: ch%2 %3 %4 -> %5\n")
                         .arg(_csvSampleIndex).arg(channel + 1).arg(what)
                         .arg(from, 0, 'g', 6).arg(to, 0, 'g', 6).toUtf8());
+}
+
+QString MainWindow::_CsvRow(qint64 index, const QVector<float> &packet) const
+{
+    // engineering units, not the wire's normalised bytes: a file of
+    // normalised numbers cannot be read back without separately
+    // remembering what every channel was scaled by
+    QStringList fields;
+    fields.append(QString::number(index));
+    for (int channel = 0; channel < packet.size() && channel < SCOPE_CHANNEL_COUNT; channel++)
+    {
+        const float v = packet.at(channel);
+        // NaN is a sample the drive lost: an empty cell, which a spreadsheet
+        // leaves blank and pandas reads back as NaN
+        if (std::isnan(v))
+        {
+            fields.append(QString());
+            continue;
+        }
+        const double gain = (_channelGain[channel] != 0.0) ? _channelGain[channel] : 1.0;
+        fields.append(QString::number(static_cast<double>(v)*128.0/gain - _channelOffset[channel], 'g', 6));
+    }
+    return fields.join(',') + "\n";
+}
+
+QString MainWindow::_ScopePeriodText() const
+{
+    return QString("%1 s (%2 Hz)").arg(_scopePeriod, 0, 'g', 6).arg(1.0/_scopePeriod, 0, 'g', 6);
+}
+
+void MainWindow::_UpdateScopeStatus()
+{
+    if (!_serialConnection->isConnected())
+    {
+        _scopeStatusLabel->setText(tr("scope -"));
+        return;
+    }
+    QString text = (_scopePeriod > 0.0) ? tr("scope %1 Hz").arg(1.0/_scopePeriod, 0, 'g', 6) : tr("scope ? Hz");
+    if (_scopeFormat == 1)
+        text += tr(", float");
+    else if (_scopeFormat == 0)
+        text += tr(", 8 bit");
+    if (_scopeLost > 0)
+        text += tr(", lost %1").arg(_scopeLost);
+    _scopeStatusLabel->setText(text);
 }
 
 void MainWindow::slot_RefreshScopeConfig()
@@ -706,25 +781,88 @@ void MainWindow::slot_ScopePacketReceived(const QVector<float> &packet)
         _xyOscilloscope->addChannelsSample(packet);
     }
     if (_csvFile->isOpen() && !packet.isEmpty())
-    {
-        // engineering units, not the wire's normalised bytes: a file of
-        // normalised numbers cannot be read back without separately
-        // remembering what every channel was scaled by
-        QStringList fields;
-        fields.append(QString::number(_csvSampleIndex++));
-        for (int channel = 0; channel < packet.size(); channel++)
-        {
-            const double gain = (_channelGain[channel] != 0.0) ? _channelGain[channel] : 1.0;
-            fields.append(QString::number(static_cast<double>(packet.at(channel))*128.0/gain - _channelOffset[channel], 'g', 6));
-        }
-        _csvFile->write((fields.join(',') + "\n").toUtf8());
-    }
+        _csvFile->write(_CsvRow(_csvSampleIndex++, packet).toUtf8());
 }
 
 void MainWindow::slot_ScopeResetReceived()
 {
     _oscilloscope->resetScanning();
     _xyOscilloscope->resetScanning();
+}
+
+void MainWindow::slot_ScopeSamplesLost(int count)
+{
+    _scopeLost += count;
+    _UpdateScopeStatus();
+    // the demux follows this with up to 64 NaN samples, which land as empty
+    // rows starting at the current index
+    if (_csvFile->isOpen())
+    {
+        _csvFile->write(QString("# at sample %1: %2 live samples lost, %3 empty rows stand in for them\n")
+                            .arg(_csvSampleIndex).arg(count).arg(qMin(count, 64)).toUtf8());
+    }
+}
+
+void MainWindow::slot_ScopeHeaderReceived(int kind, double period, int count, int pre)
+{
+    if (kind == 1)
+    {
+        statusBar()->showMessage(tr("receiving capture: %1 samples, %2 before the trigger").arg(count).arg(pre), 5000);
+        return;
+    }
+    if (kind != 0 || !(period > 0.0))
+        return;
+    _scopePeriod = period;
+    _UpdateScopeStatus();
+    // a header follows a reset, a format or rate change and every capture,
+    // so the file says what the rows after this point were sampled at
+    if (_csvFile->isOpen())
+        _csvFile->write(QString("# at sample %1: live period = %2\n").arg(_csvSampleIndex).arg(_ScopePeriodText()).toUtf8());
+}
+
+void MainWindow::slot_ScopeFormatChanged(bool isFloat)
+{
+    _scopeFormat = isFloat ? 1 : 0;
+    _UpdateScopeStatus();
+}
+
+void MainWindow::slot_CaptureReceived(const QVector< QVector<float> > &samples, double period, int pre)
+{
+    // shown even while paused: a capture is asked for, so it is wanted now.
+    // it stays up until the next arm or "Resume Live".
+    _oscilloscope->showCapture(samples, pre);
+    statusBar()->showMessage(tr("capture: %1 samples at %2 Hz, trigger at sample %3")
+                                 .arg(samples.size()).arg(period > 0.0 ? 1.0/period : 0.0, 0, 'g', 6).arg(pre), 10000);
+    slot_UpdateButtons();
+    if (_csvFile->isOpen())
+    {
+        // a block of its own, on its own time base. the first column counts
+        // capture samples, with the trigger at index pre; live numbering
+        // carries on after the end marker.
+        _csvFile->write(QString("# capture period=%1, pre=%2, count=%3\n")
+                            .arg(period, 0, 'g', 6).arg(pre).arg(samples.size()).toUtf8());
+        for (int i = 0; i < samples.size(); i++)
+            _csvFile->write(_CsvRow(i, samples.at(i)).toUtf8());
+        _csvFile->write(QByteArray("# end capture\n"));
+    }
+}
+
+void MainWindow::slot_ArmCapture()
+{
+    if (!_serialConnection->isConnected())
+    {
+        QMessageBox::warning(this, "Error arming capture", "Serial port not open!");
+        return;
+    }
+    // back to live while waiting, so the trigger condition can be watched
+    slot_ResumeLive();
+    _serialConnection->sendData("term0.cap_arm = 1\n");
+}
+
+void MainWindow::slot_ResumeLive()
+{
+    _oscilloscope->resumeLive();
+    slot_UpdateButtons();
 }
 
 void MainWindow::slot_UpdateButtons()
@@ -742,6 +880,8 @@ void MainWindow::slot_UpdateButtons()
     _actions->driveDisable->setEnabled(portOpen);
     _actions->driveEditConfig->setEnabled(portOpen);
     _actions->dataRecord->setEnabled(portOpen);
+    _actions->viewScopeArmCapture->setEnabled(portOpen);
+    _actions->viewScopeResumeLive->setEnabled(_oscilloscope->isShowingCapture());
     if (!portOpen)
         _actions->dataRecord->setChecked(false);
     _sendButton->setEnabled(portOpen && hasCommand);

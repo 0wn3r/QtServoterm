@@ -45,6 +45,10 @@ SerialConnection::SerialConnection(QObject *parent) :
 #endif
     connect(_demux, &ScopeDataDemux::scopePacketReceived, this, &SerialConnection::scopePacketReceived);
     connect(_demux, &ScopeDataDemux::scopeResetReceived, this, &SerialConnection::scopeResetReceived);
+    connect(_demux, &ScopeDataDemux::scopeSamplesLost, this, &SerialConnection::scopeSamplesLost);
+    connect(_demux, &ScopeDataDemux::scopeHeaderReceived, this, &SerialConnection::scopeHeaderReceived);
+    connect(_demux, &ScopeDataDemux::scopeFormatChanged, this, &SerialConnection::scopeFormatChanged);
+    connect(_demux, &ScopeDataDemux::captureReceived, this, &SerialConnection::captureReceived);
     connect(_redirectingTimer, &QTimer::timeout, this, &SerialConnection::slot_ConfigReceiveTimeout);
     connect(_serialSendTimer, &QTimer::timeout, this, &SerialConnection::slot_SerialSendFromQueue);
 }
@@ -123,6 +127,9 @@ void SerialConnection::connectTo(const QString &portName)
         }
         return;
     }
+    // a frame or capture cut off by the last disconnect must not be finished
+    // with bytes from this connection
+    _demux->reset();
     const bool isValidSerialPort = !isValidSerialPortName(portName);
     if (isValidSerialPort)
     {

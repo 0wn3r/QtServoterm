@@ -25,6 +25,8 @@
 #include <QPainter>
 #include <QTimer>
 
+#include <cmath>
+
 namespace STMBL_Servoterm {
 
 static const int MINIMUM_PLOT_SIZE = 256;
@@ -151,11 +153,19 @@ void XYOscilloscope::addChannelsSample(const QVector<float> &channelsSample)
         return;
     const float xv = channelsSample.at(_xChannel);
     const float yv = channelsSample.at(_yChannel);
+    // NaN stands in for a lost sample, which has no place on the locus
+    if (std::isnan(xv) || std::isnan(yv))
+        return;
     _xClipped = (xv <= SCOPE_CLAMP_LOW || xv >= SCOPE_CLAMP_HIGH);
     _yClipped = (yv <= SCOPE_CLAMP_LOW || yv >= SCOPE_CLAMP_HIGH);
 
     // update the off-screen buffer
-    QPoint pt(128+xv*128, 128-yv*128);
+    // float samples can run past +-1 (or to inf), so bound them before they
+    // meet an int, and leave anything off the image undrawn: a pixel outside
+    // it would never fade and would keep the fade timer running for good
+    QPoint pt(128 + qBound(-2.0f, xv, 2.0f)*128, 128 - qBound(-2.0f, yv, 2.0f)*128);
+    if (!_plot.rect().contains(pt))
+        return;
     // a point that reached the rail is pinned, not measured, so it flattens
     // the locus against the edge -- exactly the shape a gain mismatch makes
     _plot.setPixel(pt, QColor((_xClipped || _yClipped) ? Qt::red : Qt::blue).rgba());
