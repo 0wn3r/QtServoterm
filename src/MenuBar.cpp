@@ -52,9 +52,22 @@ MenuBar::MenuBar(Actions *actions, QWidget *parent) : QMenuBar(parent)
     QMenu * const viewMenu = addMenu("&View");
     viewMenu->addAction(actions->viewOscilloscope);
     viewMenu->addAction(actions->viewXYScope);
+    viewMenu->addAction(actions->viewScopePause);
+    viewMenu->addAction(actions->viewScopeArmCapture);
+    viewMenu->addAction(actions->viewScopeResumeLive);
     viewMenu->addAction(actions->viewConsole);
     viewMenu->addSeparator();
     viewMenu->addAction(actions->viewClearConsole);
+    viewMenu->addSeparator();
+    QMenu * const themeMenu = viewMenu->addMenu("Theme");
+    themeMenu->addAction(actions->viewThemeSystem);
+    themeMenu->addAction(actions->viewThemeLight);
+    themeMenu->addAction(actions->viewThemeDark);
+    themeGroup = new QActionGroup(this);
+    themeGroup->setExclusive(true);
+    themeGroup->addAction(actions->viewThemeSystem);
+    themeGroup->addAction(actions->viewThemeLight);
+    themeGroup->addAction(actions->viewThemeDark);
 }
 
 } // namespace STMBL_Servoterm

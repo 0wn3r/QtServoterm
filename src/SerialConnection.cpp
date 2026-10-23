@@ -7,6 +7,7 @@
 #include <QTimer>
 #include <QMessageBox>
 #include <QMetaEnum>
+#include <QRegularExpression>
 
 namespace STMBL_Servoterm {
 
@@ -44,6 +45,10 @@ SerialConnection::SerialConnection(QObject *parent) :
 #endif
     connect(_demux, &ScopeDataDemux::scopePacketReceived, this, &SerialConnection::scopePacketReceived);
     connect(_demux, &ScopeDataDemux::scopeResetReceived, this, &SerialConnection::scopeResetReceived);
+    connect(_demux, &ScopeDataDemux::scopeSamplesLost, this, &SerialConnection::scopeSamplesLost);
+    connect(_demux, &ScopeDataDemux::scopeHeaderReceived, this, &SerialConnection::scopeHeaderReceived);
+    connect(_demux, &ScopeDataDemux::scopeFormatChanged, this, &SerialConnection::scopeFormatChanged);
+    connect(_demux, &ScopeDataDemux::captureReceived, this, &SerialConnection::captureReceived);
     connect(_redirectingTimer, &QTimer::timeout, this, &SerialConnection::slot_ConfigReceiveTimeout);
     connect(_serialSendTimer, &QTimer::timeout, this, &SerialConnection::slot_SerialSendFromQueue);
 }
@@ -122,6 +127,9 @@ void SerialConnection::connectTo(const QString &portName)
         }
         return;
     }
+    // a frame or capture cut off by the last disconnect must not be finished
+    // with bytes from this connection
+    _demux->reset();
     const bool isValidSerialPort = !isValidSerialPortName(portName);
     if (isValidSerialPort)
     {
@@ -142,7 +150,8 @@ void SerialConnection::connectTo(const QString &portName)
     else // must be IP (or maybe even hostname?)
     {
         const QStringList parts = portName.split(':');
-        const bool isValidNetworkPort = (parts.size() == 2) && QRegExp("\\d*").exactMatch(parts.at(1)) && parts.at(1).toInt() <= std::numeric_limits<quint16>::max();
+        static const QRegularExpression allDigitsRe(QRegularExpression::anchoredPattern("\\d*"));
+        const bool isValidNetworkPort = (parts.size() == 2) && allDigitsRe.match(parts.at(1)).hasMatch() && parts.at(1).toInt() <= std::numeric_limits<quint16>::max();
         if (!isValidNetworkPort)
         {
             QMessageBox::critical(nullptr, "Error connecting", "Unable to interpret \"" + portName + "\" as a serial port device name nor as an IP/port");
@@ -345,7 +354,11 @@ void SerialConnection::_HandleReceivedData(const QByteArray &data)
             emit configLineReceived(txt);
         }
         else
-            emit lineReceived(txt.replace("<=", "&lt;=")); // HACK, we really need to stop interpreting the data as HTML...
+        {
+            emit textReceived(txt);
+            QString html = txt;
+            emit lineReceived(html.replace("<=", "&lt;=")); // HACK, we really need to stop interpreting the data as HTML...
+        }
     }
 }
 

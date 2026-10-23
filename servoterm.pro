@@ -1,5 +1,5 @@
 QT += widgets serialport network
-CONFIG += object_parallel_to_source
+CONFIG += object_parallel_to_source c++17
 
 HEADERS = \
 src/AppendTextToEdit.h \
@@ -12,6 +12,7 @@ src/XYOscilloscope.h \
 src/HistoryLineEdit.h \
 src/SerialConnection.h \
 src/ScopeDataDemux.h \
+src/D250.h \
 src/MainWindow.h
 
 SOURCES = \

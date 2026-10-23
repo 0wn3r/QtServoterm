@@ -20,13 +20,22 @@
 #include <QtWidgets>
 #include <QToolBar>
 #include <QSettings>
-#include <QRegExp>
 #include <QTextEdit>
 #include <QPlainTextEdit>
 #include <QLineEdit>
 #include <QLabel>
 #include <QPushButton>
 #include <QCheckBox>
+#include <QComboBox>
+#include <QToolButton>
+#include <QGroupBox>
+#include <QRegularExpression>
+#include <QSignalBlocker>
+#include <QDoubleSpinBox>
+#include <QGridLayout>
+#include <QLabel>
+
+#include <cmath>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QShortcut>
@@ -36,6 +45,7 @@
 #include <QFileInfo>
 #include <QFile>
 #include <QDesktopServices>
+#include <QStyleHints>
 // #include <QDebug>
 
 #include "MainWindow.h"
@@ -68,6 +78,7 @@ MainWindow::MainWindow(QWidget *parent) :
     _portList(new ClickableComboBox),
     _oscilloscope(new Oscilloscope),
     _xyOscilloscope(new XYOscilloscope),
+    _scopeConfigPanel(new QWidget),
     _textLog(new QTextEdit),
     _lineEdit(new HistoryLineEdit),
     _sendButton(new QPushButton("Send")),
@@ -76,9 +87,16 @@ MainWindow::MainWindow(QWidget *parent) :
     _jogTimer(new QTimer(this)),
     _csvFile(new QFile(this)),
     _estopShortcut(new QShortcut(QKeySequence("Esc"), this)),
+    _sendStep(0.0),
+    _csvSampleIndex(0),
     _leftPressed(false),
-    _rightPressed(false)
+    _rightPressed(false),
+    _theme(THEME_SYSTEM)
 {
+    _scopePeriod = 0.0;
+    _scopeFormat = -1;
+    _scopeLost = 0;
+    _scopeStatusLabel = new QLabel;
     _jogTimer->setInterval(SEND_JOG_COMMAND_PERIOD_MS);
     _portList->setEditable(true);
     {
@@ -114,6 +132,7 @@ MainWindow::MainWindow(QWidget *parent) :
     _actions->viewOscilloscope->setChecked(true);
     _actions->viewXYScope->setChecked(false);
     _actions->viewConsole->setChecked(true);
+    _actions->viewThemeSystem->setChecked(true);
     // TODO find a better solution to the side effects of setVisible(true) when it's already visible but not shown yet
     if (!_actions->viewOscilloscope->isChecked())
         _oscilloscope->setVisible(_actions->viewOscilloscope->isChecked());
@@ -138,29 +157,20 @@ MainWindow::MainWindow(QWidget *parent) :
         toolbar->addAction(_actions->driveEnable);
         toolbar->addAction(_actions->driveJogEnable);
         toolbar->addAction(_actions->viewXYScope);
+        toolbar->addAction(_actions->viewScopePause);
+        toolbar->addAction(_actions->viewScopeArmCapture);
+        toolbar->addAction(_actions->viewScopeResumeLive);
         toolbar->addAction(_actions->driveEditConfig);
         addToolBar(toolbar);
     }
     {
         QWidget * const dummy = new QWidget;
-        QVBoxLayout * const vbox = new QVBoxLayout(dummy);
-        {
-            QHBoxLayout * const hbox = new QHBoxLayout;
-            for (int channel = 0; channel < SCOPE_CHANNEL_COUNT; channel++)
-            {
-                QCheckBox * const cb = new QCheckBox(QString::number(channel + 1));
-                cb->setChecked(true);
-                QPalette pal = cb->palette();
-                pal.setColor(QPalette::WindowText, SCOPE_CHANNEL_COLORS[channel]);
-                cb->setPalette(pal);
-                connect(cb, &QCheckBox::toggled, this, [this, channel] (bool enabled) {
-                    _oscilloscope->setChannelEnabled(channel, enabled);
-                });
-                hbox->addWidget(cb);
-            }
-            hbox->addStretch(1);
-            vbox->addLayout(hbox);
-        }
+        // the scope controls fold away into a panel on the right, so eight
+        // channels of enable, gain and offset stop competing with the traces
+        // for height
+        QHBoxLayout * const outer = new QHBoxLayout(dummy);
+        QVBoxLayout * const vbox = new QVBoxLayout;
+        outer->addLayout(vbox, 1);
         {
             QHBoxLayout * const hbox = new QHBoxLayout;
             hbox->addWidget(_oscilloscope, 1);
@@ -174,8 +184,183 @@ MainWindow::MainWindow(QWidget *parent) :
             hbox->addWidget(_sendButton);
             vbox->addLayout(hbox);
         }
+        {
+            // a thin spine down the full height, so the panel folds away
+            // without hunting through a menu for it
+            QToolButton * const toggle = new QToolButton;
+            toggle->setCheckable(true);
+            toggle->setChecked(true);
+            toggle->setArrowType(Qt::RightArrow);
+            toggle->setFixedWidth(14);
+            toggle->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+            toggle->setToolTip(tr("show or hide the scope controls"));
+            connect(toggle, &QToolButton::toggled, this, [this, toggle] (bool shown) {
+                _scopeConfigPanel->setVisible(shown);
+                toggle->setArrowType(shown ? Qt::RightArrow : Qt::LeftArrow);
+            });
+            outer->addWidget(toggle);
+        }
+        {
+            // one row per channel: the panel is narrow, so the grid runs down
+            // rather than across
+            QGridLayout * const grid = new QGridLayout(_scopeConfigPanel);
+            grid->setContentsMargins(0, 0, 0, 0);
+            QLabel * const gainLabel = new QLabel(tr("gain"));
+            QLabel * const offsetLabel = new QLabel(tr("offset"));
+            gainLabel->setToolTip(tr("term0.gain<n>: window is +-127/gain, resolution is 1/gain"));
+            offsetLabel->setToolTip(tr("term0.offset<n>: the window centres on -offset"));
+            grid->addWidget(new QLabel(tr("ch")), 0, 0);
+            grid->addWidget(gainLabel, 0, 1);
+            grid->addWidget(offsetLabel, 0, 2);
+            for (int channel = 0; channel < SCOPE_CHANNEL_COUNT; channel++)
+            {
+                const int row = channel + 1;
+                _wavePins[channel] = QStringLiteral("?");
+                _channelGain[channel] = SCOPE_DEFAULT_GAIN;
+                _channelOffset[channel] = SCOPE_DEFAULT_OFFSET;
+                QCheckBox * const cb = new QCheckBox(QString::number(channel + 1));
+                cb->setChecked(true);
+                QPalette pal = cb->palette();
+                pal.setColor(QPalette::WindowText, SCOPE_CHANNEL_COLORS[channel]);
+                cb->setPalette(pal);
+                connect(cb, &QCheckBox::toggled, this, [this, channel] (bool enabled) {
+                    _oscilloscope->setChannelEnabled(channel, enabled);
+                });
+                grid->addWidget(cb, row, 0);
+
+                // term0.gain<n> is both the window and the resolution: the
+                // firmware sends CLAMP((value + offset)*gain + 128, 1, 254),
+                // so the channel spans +-127/gain at 1/gain per count. a 1-2-5
+                // sequence makes it a scope style knob the wheel can step,
+                // while the field still accepts an arbitrary value.
+                QComboBox * const gainBox = new QComboBox;
+                gainBox->setEditable(true);
+                gainBox->setInsertPolicy(QComboBox::NoInsert);
+                gainBox->setMinimumWidth(72);
+                for (int decade = -2; decade <= 3; decade++)
+                {
+                    const double scale = std::pow(10.0, decade);
+                    gainBox->addItem(QString::number(1.0*scale, 'g', 6));
+                    gainBox->addItem(QString::number(2.0*scale, 'g', 6));
+                    gainBox->addItem(QString::number(5.0*scale, 'g', 6));
+                }
+                gainBox->setCurrentText(QString::number(SCOPE_DEFAULT_GAIN, 'g', 6));
+                gainBox->setToolTip(tr("term0.gain%1: window +-%2, resolution %3")
+                                        .arg(channel).arg(127.0/SCOPE_DEFAULT_GAIN).arg(1.0/SCOPE_DEFAULT_GAIN));
+                // connected last so populating the list does not fire a send
+                connect(gainBox, &QComboBox::currentTextChanged, this, [this, channel, gainBox] (const QString &text) {
+                    bool ok = false;
+                    const double gain = text.toDouble(&ok);
+                    if (!ok || gain == 0.0)
+                        return;
+                    _NoteCsvScalingChange(channel, QStringLiteral("gain"), _channelGain[channel], gain);
+                    _channelGain[channel] = gain;
+                    _oscilloscope->setChannelGain(channel, gain);
+                    _xyOscilloscope->setChannelGain(channel, gain);
+                    gainBox->setToolTip(tr("term0.gain%1: window +-%2, resolution %3")
+                                            .arg(channel).arg(127.0/gain).arg(1.0/gain));
+                    _serialConnection->sendData(QString("term0.gain%1 = %2\n").arg(channel).arg(gain, 0, 'g', 6).toLatin1());
+                });
+                _gainBoxes[channel] = gainBox;
+                grid->addWidget(gainBox, row, 1);
+
+                // gain alone cannot window a signal that does not straddle
+                // zero: a 293 V bus at the gain needed to fit it is 2 V per
+                // count. the offset moves the window's centre so the gain can
+                // be spent on resolution instead of reach.
+                QDoubleSpinBox * const offsetBox = new QDoubleSpinBox;
+                offsetBox->setRange(-1000000.0, 1000000.0);
+                offsetBox->setDecimals(2);
+                offsetBox->setSingleStep(1.0);
+                offsetBox->setMinimumWidth(84);
+                offsetBox->setValue(SCOPE_DEFAULT_OFFSET);
+                offsetBox->setToolTip(tr("term0.offset%1: the window centres on %2")
+                                          .arg(channel).arg(-SCOPE_DEFAULT_OFFSET));
+                // connected after setValue, for the same reason as the gain
+                connect(offsetBox, &QDoubleSpinBox::valueChanged, this, [this, channel, offsetBox] (double offset) {
+                    _NoteCsvScalingChange(channel, QStringLiteral("offset"), _channelOffset[channel], offset);
+                    _channelOffset[channel] = offset;
+                    _oscilloscope->setChannelOffset(channel, offset);
+                    _xyOscilloscope->setChannelOffset(channel, offset);
+                    offsetBox->setToolTip(tr("term0.offset%1: the window centres on %2").arg(channel).arg(-offset));
+                    _serialConnection->sendData(QString("term0.offset%1 = %2\n").arg(channel).arg(offset, 0, 'g', 6).toLatin1());
+                });
+                _offsetBoxes[channel] = offsetBox;
+                grid->addWidget(offsetBox, row, 2);
+            }
+            int row = SCOPE_CHANNEL_COUNT + 1;
+            {
+                // one axis cannot label eight channels that each carry their
+                // own gain, so it borrows one channel's scale on request.
+                // every channel's own value is still on the cursor readout.
+                QComboBox * const refBox = new QComboBox;
+                refBox->setToolTip(tr("y axis units follow this channel"));
+                refBox->addItem(QStringLiteral("\u2013"), -1); // normalised
+                for (int channel = 0; channel < SCOPE_CHANNEL_COUNT; channel++)
+                    refBox->addItem(QString::number(channel + 1), channel);
+                connect(refBox, &QComboBox::currentIndexChanged, this, [this, refBox] (int index) {
+                    _oscilloscope->setReferenceChannel(refBox->itemData(index).toInt());
+                });
+                grid->addWidget(new QLabel(tr("axis")), row, 0);
+                grid->addWidget(refBox, row, 1);
+                row++;
+            }
+            {
+                // the locus says nothing unless you know which two signals
+                // drew it
+                QComboBox * const xBox = new QComboBox;
+                QComboBox * const yBox = new QComboBox;
+                for (int channel = 0; channel < SCOPE_CHANNEL_COUNT; channel++)
+                {
+                    xBox->addItem(QString::number(channel + 1));
+                    yBox->addItem(QString::number(channel + 1));
+                }
+                xBox->setCurrentIndex(0);
+                yBox->setCurrentIndex(1);
+                xBox->setToolTip(tr("x/y scope horizontal channel"));
+                yBox->setToolTip(tr("x/y scope vertical channel"));
+                // connected after, so seeding the pair does not clear the plot
+                connect(xBox, &QComboBox::currentIndexChanged, _xyOscilloscope, &XYOscilloscope::setXChannel);
+                connect(yBox, &QComboBox::currentIndexChanged, _xyOscilloscope, &XYOscilloscope::setYChannel);
+                grid->addWidget(new QLabel(tr("x/y")), row, 0);
+                grid->addWidget(xBox, row, 1);
+                grid->addWidget(yBox, row, 2);
+                row++;
+            }
+            {
+                // which pin each trace is actually carrying. hal_print_pin
+                // answers a prefix query, so one "term0.wave" fetches all
+                // eight links in a single reply.
+                QGroupBox * const box = new QGroupBox(tr("measuring"));
+                QVBoxLayout * const boxLayout = new QVBoxLayout(box);
+                boxLayout->setContentsMargins(6, 4, 6, 4);
+                boxLayout->setSpacing(1);
+                for (int channel = 0; channel < SCOPE_CHANNEL_COUNT; channel++)
+                {
+                    _waveLabels[channel] = new QLabel(QString("%1: ?").arg(channel + 1));
+                    QPalette pal = _waveLabels[channel]->palette();
+                    pal.setColor(QPalette::WindowText, SCOPE_CHANNEL_COLORS[channel]);
+                    _waveLabels[channel]->setPalette(pal);
+                    _waveLabels[channel]->setTextInteractionFlags(Qt::TextSelectableByMouse);
+                    boxLayout->addWidget(_waveLabels[channel]);
+                }
+                grid->addWidget(box, row, 0, 1, 3);
+                row++;
+                QPushButton * const refresh = new QPushButton(tr("read from drive"));
+                refresh->setToolTip(tr("re-read term0.wave, term0.gain and term0.offset"));
+                connect(refresh, &QPushButton::clicked, this, &MainWindow::slot_RefreshScopeConfig);
+                grid->addWidget(refresh, row, 0, 1, 3);
+                row++;
+            }
+            grid->setRowStretch(row, 1);
+        }
+        outer->addWidget(_scopeConfigPanel);
         setCentralWidget(dummy);
     }
+    // the drive's own word on the sample rate and format, so it is plain
+    // whether "term0.fmt = 1" took and what the time axis is worth
+    statusBar()->addPermanentWidget(_scopeStatusLabel);
+    _UpdateScopeStatus();
 
     connect(_actions->fileQuit, &QAction::triggered, qApp, &QCoreApplication::quit, Qt::QueuedConnection);
     connect(_actions->viewOscilloscope, &QAction::toggled, _oscilloscope, &QWidget::setVisible);
@@ -183,6 +368,7 @@ MainWindow::MainWindow(QWidget *parent) :
     connect(_actions->viewConsole, &QAction::toggled, _textLog, &QWidget::setVisible);
     connect(_menuBar->portMenu, &QMenu::aboutToShow, this, &MainWindow::slot_PortListClicked);
     connect(_menuBar->portGroup, &QActionGroup::triggered, this, &MainWindow::slot_PortMenuItemSelected);
+    connect(_menuBar->themeGroup, &QActionGroup::triggered, this, &MainWindow::slot_ThemeSelected);
     connect(_portList, &ClickableComboBox::clicked, this, &MainWindow::slot_PortListClicked);
     connect(_portList, &ClickableComboBox::currentTextChanged, this, &MainWindow::slot_PortLineEditChanged);
     connect(_actions->connectionConnect, &QAction::triggered, this, &MainWindow::slot_ConnectClicked);
@@ -201,6 +387,7 @@ MainWindow::MainWindow(QWidget *parent) :
     connect(_textLog, &QTextEdit::textChanged, this, &MainWindow::slot_UpdateButtons);
     connect(_estopShortcut, &QShortcut::activated, this, &MainWindow::slot_EmergencyStop);
     connect(_serialConnection, &SerialConnection::lineReceived, this, &MainWindow::slot_LogLine);
+    connect(_serialConnection, &SerialConnection::textReceived, this, &MainWindow::slot_ParseText);
     connect(_serialConnection, &SerialConnection::configLineReceived, _configDialog, &ConfigDialog::appendConfigLine);
     connect(_serialConnection, &SerialConnection::connected, this, &MainWindow::slot_SerialConnected);
     connect(_serialConnection, &SerialConnection::disconnected, this, &MainWindow::slot_SerialDisconnected);
@@ -208,6 +395,12 @@ MainWindow::MainWindow(QWidget *parent) :
     connect(_serialConnection, &SerialConnection::disconnected, this, &MainWindow::slot_UpdateButtons);
     connect(_serialConnection, &SerialConnection::scopePacketReceived, this, &MainWindow::slot_ScopePacketReceived);
     connect(_serialConnection, &SerialConnection::scopeResetReceived, this, &MainWindow::slot_ScopeResetReceived);
+    connect(_serialConnection, &SerialConnection::scopeSamplesLost, this, &MainWindow::slot_ScopeSamplesLost);
+    connect(_serialConnection, &SerialConnection::scopeHeaderReceived, this, &MainWindow::slot_ScopeHeaderReceived);
+    connect(_serialConnection, &SerialConnection::scopeFormatChanged, this, &MainWindow::slot_ScopeFormatChanged);
+    connect(_serialConnection, &SerialConnection::captureReceived, this, &MainWindow::slot_CaptureReceived);
+    connect(_actions->viewScopeArmCapture, &QAction::triggered, this, &MainWindow::slot_ArmCapture);
+    connect(_actions->viewScopeResumeLive, &QAction::triggered, this, &MainWindow::slot_ResumeLive);
     connect(_serialConnection, &SerialConnection::errorMessage, this, &MainWindow::slot_LogError);
     connect(_jogTimer, &QTimer::timeout, this, &MainWindow::slot_SendJogCommand);
     slot_UpdateButtons();
@@ -323,6 +516,11 @@ void MainWindow::slot_DataRecordToggled(bool recording)
             _actions->dataRecord->setChecked(false);
             return;
         }
+        _csvSampleIndex = 0;
+        _WriteCsvHeader();
+        // so the header describes what the drive actually has rather than what
+        // was last read. any answer that lands mid recording is noted inline.
+        slot_RefreshScopeConfig();
     }
 }
 
@@ -354,12 +552,24 @@ void MainWindow::slot_SendClicked()
 
 void MainWindow::slot_SerialConnected()
 {
+    _scopePeriod = 0.0;
+    _scopeFormat = -1;
+    _scopeLost = 0;
+    _UpdateScopeStatus();
+    // ask for the float format first, so the live header that answers it
+    // arrives with everything else. firmware without it says "not found:
+    // term0.fmt", which no parser below matches, and carries on with bytes.
+    _serialConnection->sendData("term0.fmt = 1\n");
+    slot_RefreshScopeConfig();
     AppendTextToEdit(*_textLog, &QTextEdit::insertHtml, "<font color=\"FireBrick\">connected</font>");
     AppendTextToEdit(*_textLog, &QTextEdit::insertPlainText, "\n");
 }
 
 void MainWindow::slot_SerialDisconnected()
 {
+    _scopePeriod = 0.0;
+    _scopeFormat = -1;
+    _UpdateScopeStatus();
     AppendTextToEdit(*_textLog, &QTextEdit::insertHtml, "<font color=\"FireBrick\">disconnected</font>");
     AppendTextToEdit(*_textLog, &QTextEdit::insertPlainText, "\n");
 }
@@ -367,6 +577,191 @@ void MainWindow::slot_SerialDisconnected()
 void MainWindow::slot_LogLine(const QString &line)
 {
     AppendTextToEdit(*_textLog, &QTextEdit::insertHtml, line);
+}
+
+void MainWindow::_WriteCsvHeader()
+{
+    if (!_csvFile->isOpen())
+        return;
+    QStringList header;
+    header.append(QStringLiteral("# stmbl servoterm recording"));
+    header.append("# " + QDateTime::currentDateTime().toString(Qt::ISODate));
+    // the drive samples every send_step rt ticks, so this is the time base the
+    // row index has to be read against
+    header.append(_sendStep > 0.0 ? QString("# term0.send_step = %1").arg(_sendStep, 0, 'g', 6)
+                                  : QStringLiteral("# term0.send_step unknown"));
+    header.append(_scopePeriod > 0.0 ? QString("# scope period = %1").arg(_ScopePeriodText())
+                                     : QStringLiteral("# scope period unknown (no header from the drive)"));
+    header.append(QStringLiteral("# values are engineering units: normalised*128/gain - offset"));
+    header.append(QStringLiteral("# empty cells are samples the drive lost"));
+    for (int channel = 0; channel < SCOPE_CHANNEL_COUNT; channel++)
+    {
+        header.append(QString("# ch%1 %2 gain %3 offset %4")
+                          .arg(channel + 1)
+                          .arg(_wavePins[channel])
+                          .arg(_channelGain[channel], 0, 'g', 6)
+                          .arg(_channelOffset[channel], 0, 'g', 6));
+    }
+    QStringList columns;
+    columns.append(QStringLiteral("sample"));
+    for (int channel = 0; channel < SCOPE_CHANNEL_COUNT; channel++)
+        columns.append(QString("ch%1").arg(channel + 1));
+    header.append(columns.join(','));
+    _csvFile->write((header.join('\n') + "\n").toUtf8());
+}
+
+void MainWindow::_NoteCsvScalingChange(int channel, const QString &what, double from, double to)
+{
+    // a scaling change mid recording means the rows above and below mean
+    // different things, so the file has to say where it happened
+    if (!_csvFile->isOpen() || from == to)
+        return;
+    _csvFile->write(QString("# at sample %1: ch%2 %3 %4 -> %5\n")
+                        .arg(_csvSampleIndex).arg(channel + 1).arg(what)
+                        .arg(from, 0, 'g', 6).arg(to, 0, 'g', 6).toUtf8());
+}
+
+QString MainWindow::_CsvRow(qint64 index, const QVector<float> &packet) const
+{
+    // engineering units, not the wire's normalised bytes: a file of
+    // normalised numbers cannot be read back without separately
+    // remembering what every channel was scaled by
+    QStringList fields;
+    fields.append(QString::number(index));
+    for (int channel = 0; channel < packet.size() && channel < SCOPE_CHANNEL_COUNT; channel++)
+    {
+        const float v = packet.at(channel);
+        // NaN is a sample the drive lost: an empty cell, which a spreadsheet
+        // leaves blank and pandas reads back as NaN
+        if (std::isnan(v))
+        {
+            fields.append(QString());
+            continue;
+        }
+        const double gain = (_channelGain[channel] != 0.0) ? _channelGain[channel] : 1.0;
+        fields.append(QString::number(static_cast<double>(v)*128.0/gain - _channelOffset[channel], 'g', 6));
+    }
+    return fields.join(',') + "\n";
+}
+
+QString MainWindow::_ScopePeriodText() const
+{
+    return QString("%1 s (%2 Hz)").arg(_scopePeriod, 0, 'g', 6).arg(1.0/_scopePeriod, 0, 'g', 6);
+}
+
+void MainWindow::_UpdateScopeStatus()
+{
+    if (!_serialConnection->isConnected())
+    {
+        _scopeStatusLabel->setText(tr("scope -"));
+        return;
+    }
+    QString text = (_scopePeriod > 0.0) ? tr("scope %1 Hz").arg(1.0/_scopePeriod, 0, 'g', 6) : tr("scope ? Hz");
+    if (_scopeFormat == 1)
+        text += tr(", float");
+    else if (_scopeFormat == 0)
+        text += tr(", 8 bit");
+    if (_scopeLost > 0)
+        text += tr(", lost %1").arg(_scopeLost);
+    _scopeStatusLabel->setText(text);
+}
+
+void MainWindow::slot_RefreshScopeConfig()
+{
+    // prefix queries: hal.c matches on strlen of what you typed, so each of
+    // these returns all eight pins rather than needing eight round trips
+    _serialConnection->sendData("term0.wave\n");
+    _serialConnection->sendData("term0.gain\n");
+    _serialConnection->sendData("term0.offset\n");
+    _serialConnection->sendData("term0.send_step\n");
+}
+
+void MainWindow::slot_ParseText(const QString &text)
+{
+    // the serial layer hands over whatever bytes arrived, not whole lines
+    _rxBuffer += text;
+    int newline;
+    while ((newline = _rxBuffer.indexOf('\n')) >= 0)
+    {
+        const QString line = _rxBuffer.left(newline);
+        _rxBuffer.remove(0, newline + 1);
+
+        static const QRegularExpression stepRe(QStringLiteral("^\\s*term0\\.send_step\\b.*=\\s*([-0-9.eE+]+)"));
+        const QRegularExpressionMatch stepMatch = stepRe.match(line);
+        if (stepMatch.hasMatch())
+        {
+            bool stepOk = false;
+            const double step = stepMatch.captured(1).toDouble(&stepOk);
+            if (stepOk)
+                _sendStep = step;
+            continue;
+        }
+
+        static const QRegularExpression pinRe(QStringLiteral("^\\s*term0\\.(wave|gain|offset)(\\d)\\b(.*)$"));
+        const QRegularExpressionMatch match = pinRe.match(line);
+        if (!match.hasMatch())
+            continue;
+        const int channel = match.captured(2).toInt();
+        if (channel < 0 || channel >= SCOPE_CHANNEL_COUNT)
+            continue;
+        const QString field = match.captured(1);
+        const QString rest = match.captured(3);
+
+        if (field == QLatin1String("wave"))
+        {
+            // hal_print_pin writes "a.b <= c.d = value", and doubles the arrow
+            // for a pin linked through another, so the last one names the real
+            // source
+            static const QRegularExpression sourceRe(QStringLiteral("<=\\s*(\\S+)"));
+            QString source;
+            QRegularExpressionMatchIterator it = sourceRe.globalMatch(rest);
+            while (it.hasNext())
+                source = it.next().captured(1);
+            _wavePins[channel] = source.isEmpty() ? QStringLiteral("\u2013") : source;
+            _waveLabels[channel]->setText(QString("%1: %2").arg(channel + 1).arg(_wavePins[channel]));
+            continue;
+        }
+
+        // every form ends in "= value", and the arrows are "<=", so the last
+        // equals sign is the one in front of the number whether the pin is
+        // linked or not
+        const int equals = rest.lastIndexOf(QLatin1Char('='));
+        if (equals < 0)
+            continue;
+        bool ok = false;
+        const double value = rest.mid(equals + 1).trimmed().toDouble(&ok);
+        if (!ok)
+            continue;
+
+        // adopt the drive's value without echoing it straight back at it
+        if (field == QLatin1String("gain"))
+        {
+            if (value == 0.0)
+                continue;
+            _NoteCsvScalingChange(channel, QStringLiteral("gain"), _channelGain[channel], value);
+            _channelGain[channel] = value;
+            const QSignalBlocker blocker(_gainBoxes[channel]);
+            _gainBoxes[channel]->setCurrentText(QString::number(value, 'g', 6));
+            _gainBoxes[channel]->setToolTip(tr("term0.gain%1: window +-%2, resolution %3")
+                                                .arg(channel).arg(127.0/value).arg(1.0/value));
+            _oscilloscope->setChannelGain(channel, value);
+            _xyOscilloscope->setChannelGain(channel, value);
+        }
+        else // offset
+        {
+            _NoteCsvScalingChange(channel, QStringLiteral("offset"), _channelOffset[channel], value);
+            _channelOffset[channel] = value;
+            const QSignalBlocker blocker(_offsetBoxes[channel]);
+            _offsetBoxes[channel]->setValue(value);
+            _offsetBoxes[channel]->setToolTip(tr("term0.offset%1: the window centres on %2")
+                                                  .arg(channel).arg(-value));
+            _oscilloscope->setChannelOffset(channel, value);
+            _xyOscilloscope->setChannelOffset(channel, value);
+        }
+    }
+    // a reply that never ends in a newline must not grow without bound
+    if (_rxBuffer.size() > 4096)
+        _rxBuffer.clear();
 }
 
 void MainWindow::slot_LogError(const QString &errorMessage)
@@ -377,23 +772,97 @@ void MainWindow::slot_LogError(const QString &errorMessage)
 
 void MainWindow::slot_ScopePacketReceived(const QVector<float> &packet)
 {
-    _oscilloscope->addChannelsSample(packet);
-    _xyOscilloscope->addChannelsSample(packet);
-    if (_csvFile->isOpen() && !packet.isEmpty())
+    // pause freezes the view so the cursor can be walked across a captured
+    // event. it deliberately does not stop a recording in progress -- the csv
+    // below keeps taking every sample.
+    if (!_actions->viewScopePause->isChecked())
     {
-        QStringList fields;
-        for (QVector<float>::const_iterator it = packet.begin(); it != packet.end(); ++it)
-        {
-            fields.append(QString::number(*it, 'f'));
-        }
-        _csvFile->write((fields.join(',') + "\n").toUtf8());
+        _oscilloscope->addChannelsSample(packet);
+        _xyOscilloscope->addChannelsSample(packet);
     }
+    if (_csvFile->isOpen() && !packet.isEmpty())
+        _csvFile->write(_CsvRow(_csvSampleIndex++, packet).toUtf8());
 }
 
 void MainWindow::slot_ScopeResetReceived()
 {
     _oscilloscope->resetScanning();
     _xyOscilloscope->resetScanning();
+}
+
+void MainWindow::slot_ScopeSamplesLost(int count)
+{
+    _scopeLost += count;
+    _UpdateScopeStatus();
+    // the demux follows this with up to 64 NaN samples, which land as empty
+    // rows starting at the current index
+    if (_csvFile->isOpen())
+    {
+        _csvFile->write(QString("# at sample %1: %2 live samples lost, %3 empty rows stand in for them\n")
+                            .arg(_csvSampleIndex).arg(count).arg(qMin(count, 64)).toUtf8());
+    }
+}
+
+void MainWindow::slot_ScopeHeaderReceived(int kind, double period, int count, int pre)
+{
+    if (kind == 1)
+    {
+        statusBar()->showMessage(tr("receiving capture: %1 samples, %2 before the trigger").arg(count).arg(pre), 5000);
+        return;
+    }
+    if (kind != 0 || !(period > 0.0))
+        return;
+    _scopePeriod = period;
+    _UpdateScopeStatus();
+    // a header follows a reset, a format or rate change and every capture,
+    // so the file says what the rows after this point were sampled at
+    if (_csvFile->isOpen())
+        _csvFile->write(QString("# at sample %1: live period = %2\n").arg(_csvSampleIndex).arg(_ScopePeriodText()).toUtf8());
+}
+
+void MainWindow::slot_ScopeFormatChanged(bool isFloat)
+{
+    _scopeFormat = isFloat ? 1 : 0;
+    _UpdateScopeStatus();
+}
+
+void MainWindow::slot_CaptureReceived(const QVector< QVector<float> > &samples, double period, int pre)
+{
+    // shown even while paused: a capture is asked for, so it is wanted now.
+    // it stays up until the next arm or "Resume Live".
+    _oscilloscope->showCapture(samples, pre);
+    statusBar()->showMessage(tr("capture: %1 samples at %2 Hz, trigger at sample %3")
+                                 .arg(samples.size()).arg(period > 0.0 ? 1.0/period : 0.0, 0, 'g', 6).arg(pre), 10000);
+    slot_UpdateButtons();
+    if (_csvFile->isOpen())
+    {
+        // a block of its own, on its own time base. the first column counts
+        // capture samples, with the trigger at index pre; live numbering
+        // carries on after the end marker.
+        _csvFile->write(QString("# capture period=%1, pre=%2, count=%3\n")
+                            .arg(period, 0, 'g', 6).arg(pre).arg(samples.size()).toUtf8());
+        for (int i = 0; i < samples.size(); i++)
+            _csvFile->write(_CsvRow(i, samples.at(i)).toUtf8());
+        _csvFile->write(QByteArray("# end capture\n"));
+    }
+}
+
+void MainWindow::slot_ArmCapture()
+{
+    if (!_serialConnection->isConnected())
+    {
+        QMessageBox::warning(this, "Error arming capture", "Serial port not open!");
+        return;
+    }
+    // back to live while waiting, so the trigger condition can be watched
+    slot_ResumeLive();
+    _serialConnection->sendData("term0.cap_arm = 1\n");
+}
+
+void MainWindow::slot_ResumeLive()
+{
+    _oscilloscope->resumeLive();
+    slot_UpdateButtons();
 }
 
 void MainWindow::slot_UpdateButtons()
@@ -411,6 +880,8 @@ void MainWindow::slot_UpdateButtons()
     _actions->driveDisable->setEnabled(portOpen);
     _actions->driveEditConfig->setEnabled(portOpen);
     _actions->dataRecord->setEnabled(portOpen);
+    _actions->viewScopeArmCapture->setEnabled(portOpen);
+    _actions->viewScopeResumeLive->setEnabled(_oscilloscope->isShowingCapture());
     if (!portOpen)
         _actions->dataRecord->setChecked(false);
     _sendButton->setEnabled(portOpen && hasCommand);
@@ -459,6 +930,16 @@ void MainWindow::slot_SendJogCommand()
         _jogTimer->stop();
     else
         _jogTimer->start();
+}
+
+void MainWindow::slot_ThemeSelected(QAction *act)
+{
+    Theme theme = THEME_SYSTEM;
+    if (act == _actions->viewThemeLight)
+        theme = THEME_LIGHT;
+    else if (act == _actions->viewThemeDark)
+        theme = THEME_DARK;
+    _ApplyTheme(theme);
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent *event)
@@ -611,6 +1092,9 @@ void MainWindow::_saveSettings()
     _settings->beginGroup("ConfigDialog");
     _settings->setValue("geometry", _configDialog->saveGeometry());
     _settings->endGroup();
+    _settings->beginGroup("Theme");
+    _settings->setValue("mode", static_cast<int>(_theme));
+    _settings->endGroup();
 }
 
 void MainWindow::_loadSettings()
@@ -622,6 +1106,81 @@ void MainWindow::_loadSettings()
     _settings->beginGroup("ConfigDialog");
     _configDialog->restoreGeometry(_settings->value("geometry").toByteArray());
     _settings->endGroup();
+    _settings->beginGroup("Theme");
+    const int theme = _settings->value("mode", static_cast<int>(THEME_SYSTEM)).toInt();
+    _settings->endGroup();
+    switch (theme)
+    {
+        case THEME_LIGHT: _actions->viewThemeLight->setChecked(true); break;
+        case THEME_DARK:  _actions->viewThemeDark->setChecked(true);  break;
+        default:          _actions->viewThemeSystem->setChecked(true); break;
+    }
+    _ApplyTheme(static_cast<Theme>(theme));
+}
+
+void MainWindow::_ApplyTheme(int theme)
+{
+    _theme = static_cast<Theme>(theme);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+    // the officially supported way to force light/dark/system regardless
+    // of the native style -- available from Qt 6.5 onward
+    switch (_theme)
+    {
+        case THEME_LIGHT:
+        qApp->styleHints()->setColorScheme(Qt::ColorScheme::Light);
+        break;
+
+        case THEME_DARK:
+        qApp->styleHints()->setColorScheme(Qt::ColorScheme::Dark);
+        break;
+
+        case THEME_SYSTEM:
+        default:
+        qApp->styleHints()->setColorScheme(Qt::ColorScheme::Unknown);
+        break;
+    }
+#else
+    // Qt < 6.5 has no QStyleHints::setColorScheme(); best effort with a
+    // manual Fusion-based palette for Light/Dark. There's no clean way
+    // back to "System" once overridden pre-6.5 short of a restart, so
+    // System just leaves whatever's currently applied alone.
+    switch (_theme)
+    {
+        case THEME_LIGHT:
+        {
+            qApp->setStyle("Fusion");
+            qApp->setPalette(QApplication::style()->standardPalette());
+            break;
+        }
+
+        case THEME_DARK:
+        {
+            qApp->setStyle("Fusion");
+            QPalette pal;
+            pal.setColor(QPalette::Window, QColor(53, 53, 53));
+            pal.setColor(QPalette::WindowText, Qt::white);
+            pal.setColor(QPalette::Base, QColor(35, 35, 35));
+            pal.setColor(QPalette::AlternateBase, QColor(53, 53, 53));
+            pal.setColor(QPalette::ToolTipBase, Qt::white);
+            pal.setColor(QPalette::ToolTipText, Qt::white);
+            pal.setColor(QPalette::Text, Qt::white);
+            pal.setColor(QPalette::Button, QColor(53, 53, 53));
+            pal.setColor(QPalette::ButtonText, Qt::white);
+            pal.setColor(QPalette::BrightText, Qt::red);
+            pal.setColor(QPalette::Link, QColor(42, 130, 218));
+            pal.setColor(QPalette::Highlight, QColor(42, 130, 218));
+            pal.setColor(QPalette::HighlightedText, Qt::black);
+            pal.setColor(QPalette::Disabled, QPalette::Text, QColor(127, 127, 127));
+            pal.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(127, 127, 127));
+            qApp->setPalette(pal);
+            break;
+        }
+
+        case THEME_SYSTEM:
+        default:
+        break;
+    }
+#endif
 }
 
 } // namespace STMBL_Servoterm

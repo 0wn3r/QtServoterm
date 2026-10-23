@@ -20,12 +20,17 @@
 #ifndef STMBL_SERVOTERM_MAINWINDOW_H
 #define STMBL_SERVOTERM_MAINWINDOW_H
 
+#include "globals.h"
+
 #include <QMainWindow>
 #include <QStringList>
 
 QT_BEGIN_NAMESPACE
 class QPushButton;
 class QCheckBox;
+class QLabel;
+class QComboBox;
+class QDoubleSpinBox;
 class QTextEdit;
 class QShortcut;
 class QSettings;
@@ -66,11 +71,20 @@ protected slots:
     void slot_SerialConnected();
     void slot_SerialDisconnected();
     void slot_LogLine(const QString &line);
+    void slot_ParseText(const QString &text);
+    void slot_RefreshScopeConfig();
     void slot_LogError(const QString &errorMessage);
     void slot_ScopePacketReceived(const QVector<float> &packet);
     void slot_ScopeResetReceived();
+    void slot_ScopeSamplesLost(int count);
+    void slot_ScopeHeaderReceived(int kind, double period, int count, int pre);
+    void slot_ScopeFormatChanged(bool isFloat);
+    void slot_CaptureReceived(const QVector< QVector<float> > &samples, double period, int pre);
+    void slot_ArmCapture();
+    void slot_ResumeLive();
     void slot_UpdateButtons();
     void slot_SendJogCommand();
+    void slot_ThemeSelected(QAction *act);
 protected:
     void dragEnterEvent(QDragEnterEvent *event);
     void dragMoveEvent(QDragMoveEvent *event);
@@ -79,8 +93,21 @@ protected:
     void closeEvent(QCloseEvent *event);
     bool eventFilter(QObject *obj, QEvent *event);
     void _RepopulateDeviceList();
+    void _WriteCsvHeader();
+    void _NoteCsvScalingChange(int channel, const QString &what, double from, double to);
+    QString _CsvRow(qint64 index, const QVector<float> &packet) const;
+    QString _ScopePeriodText() const;
+    void _UpdateScopeStatus();
     void _saveSettings();
     void _loadSettings();
+    void _ApplyTheme(int theme);
+
+    enum Theme
+    {
+        THEME_SYSTEM,
+        THEME_LIGHT,
+        THEME_DARK
+    };
 
     SerialConnection *_serialConnection;
     Actions *_actions;
@@ -88,6 +115,18 @@ protected:
     ClickableComboBox *_portList;
     Oscilloscope *_oscilloscope;
     XYOscilloscope *_xyOscilloscope;
+    QWidget *_scopeConfigPanel;
+    QLabel *_waveLabels[SCOPE_CHANNEL_COUNT];
+    // mirrored here so a recording can be written in engineering units and can
+    // name the pin behind each column
+    QString _wavePins[SCOPE_CHANNEL_COUNT];
+    double _channelGain[SCOPE_CHANNEL_COUNT];
+    double _channelOffset[SCOPE_CHANNEL_COUNT];
+    double _sendStep;
+    qint64 _csvSampleIndex;
+    QComboBox *_gainBoxes[SCOPE_CHANNEL_COUNT];
+    QDoubleSpinBox *_offsetBoxes[SCOPE_CHANNEL_COUNT];
+    QString _rxBuffer;
     QTextEdit *_textLog;
     HistoryLineEdit *_lineEdit;
     QPushButton *_sendButton;
@@ -99,6 +138,7 @@ protected:
     QShortcut *_estopShortcut;
     bool _leftPressed;
     bool _rightPressed;
+    Theme _theme;
     enum JogState
     {
         JOGGING_IDLE,
@@ -106,6 +146,13 @@ protected:
         JOGGING_CCW
     } _jogState;
     QString _recordingsDirectory;
+    // what the drive's live header and samples have said about the stream:
+    // period in seconds (0 until a header arrives), format -1 unknown, 0 the
+    // legacy bytes, 1 float, and the running count of samples it lost
+    double _scopePeriod;
+    int _scopeFormat;
+    qint64 _scopeLost;
+    QLabel *_scopeStatusLabel;
 };
 
 } // namespace STMBL_Servoterm

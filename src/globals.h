@@ -26,6 +26,18 @@ namespace STMBL_Servoterm {
 
 static const int SCOPE_CHANNEL_COUNT = 8;
 
+// term.c sends each channel as CLAMP((value + offset)*gain + 128, 1, 254) and
+// ScopeDataDemux normalises that byte to (byte - 128)/128, so a sample converts
+// back to engineering units as normalised*128/gain - offset. The firmware's
+// nrt_init leaves every gain at 10 and every offset at 0, which windows +-12.7.
+static const double SCOPE_DEFAULT_GAIN = 10.0;
+static const double SCOPE_DEFAULT_OFFSET = 0.0;
+
+// the payload byte is clamped to [1,254], which is these two values once
+// normalised. a sample sitting on either is pinned, not measured.
+static const float SCOPE_CLAMP_LOW = -127.0f/128.0f;
+static const float SCOPE_CLAMP_HIGH = 126.0f/128.0f;
+
 static const QColor SCOPE_CHANNEL_COLORS[SCOPE_CHANNEL_COUNT] =
 {
     Qt::black,

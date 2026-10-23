@@ -55,9 +55,16 @@ public:
     void startReadingConfig();
 signals:
     void lineReceived(const QString &line);
+    // the same text before it is mangled for html, for anything that needs to
+    // read it rather than display it
+    void textReceived(const QString &text);
     void configLineReceived(const QString &line);
     void scopePacketReceived(const QVector<float> &packet);
     void scopeResetReceived();
+    void scopeSamplesLost(int count);
+    void scopeHeaderReceived(int kind, double period, int count, int pre);
+    void scopeFormatChanged(bool isFloat);
+    void captureReceived(const QVector< QVector<float> > &samples, double period, int pre);
     void connected();
     void disconnected();
     void errorMessage(const QString &errorMessage);

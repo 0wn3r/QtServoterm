@@ -44,8 +44,14 @@ public:
     QAction *dataOpenDirectory;
     QAction *viewOscilloscope;
     QAction *viewXYScope;
+    QAction *viewScopePause;
+    QAction *viewScopeArmCapture;
+    QAction *viewScopeResumeLive;
     QAction *viewConsole;
     QAction *viewClearConsole;
+    QAction *viewThemeSystem;
+    QAction *viewThemeLight;
+    QAction *viewThemeDark;
 };
 
 } // namespace STMBL_Servoterm
